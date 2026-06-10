@@ -1,0 +1,299 @@
+/**
+ * Modèle de données indexé pour une fonction GAS.
+ * Sous-ensemble du V1 §4.2, scanner v0 (sans inferred_contract ni shapes).
+ */
+
+export interface Position {
+  line: number;
+  col: number;
+}
+
+export interface Param {
+  name: string;
+  jsdoc_type: string | null;
+  desc: string | null;
+}
+
+export interface ReturnDoc {
+  jsdoc_type: string | null;
+  desc: string | null;
+}
+
+export type Visibility = 'public' | 'private';
+
+export interface FunctionDefinition {
+  file: string;
+  line: number;
+  col: number;
+  end_line: number;
+  params: Param[];
+  returns: ReturnDoc | null;
+  visibility: Visibility;
+  /** @deprecated — utiliser FunctionRecord.return_analysis.serializable. */
+  serializable_return: boolean | null;
+  /**
+   * Empreinte du corps de la fonction (V2 §13.2) — sert à la détection de
+   * renommage façon git. Whitespace normalisé, hash SHA-256 16 hex chars.
+   */
+  body_fingerprint: string;
+}
+
+export interface ReturnAnalysis {
+  /** Vrai si au moins un chemin renvoie `null`/`undefined`/`return` sans valeur. */
+  nullable: boolean;
+  /** Positions des retours nullables (pour reporting + diff). */
+  null_paths: Array<{ file: string; line: number }>;
+  /**
+   * Sérialisabilité du retour à travers google.script.run (V2 §11.5).
+   *   true  — composé de primitives, Date, arrays, plain objects ;
+   *   false — contient `new X()` autre que Date, ou function expression ;
+   *   'unknown' — pas de retour analysable.
+   */
+  serializable: true | false | 'unknown';
+  /** Constructeurs non-sérialisables détectés dans les retours. */
+  non_serializable_reasons: Array<{
+    file: string;
+    line: number;
+    reason: string;
+  }>;
+  /**
+   * Vrai si le retour utilise un objet avec clé(s) calculée(s) (`{[k]: v}`) →
+   * la shape ne peut pas être fermée statiquement.
+   */
+  has_open_object: boolean;
+}
+
+export type ExposureType =
+  | 'entry_point_web'
+  | 'simple_trigger'
+  | 'installable_trigger'
+  | 'client_call'
+  | 'scriptlet'
+  | 'library';
+
+export interface ClientHandlerRef {
+  name: string;
+  inline: boolean;
+  line: number;
+  col: number;
+}
+
+export type ScriptletKindLabel = '<?' | '<?=' | '<?!=';
+
+export interface Exposure {
+  type: ExposureType;
+  file: string;
+  line: number;
+  detail?: string;
+  /** Pour `client_call` : nom + position du handler de succès (s'il y en a un). */
+  success_handler?: ClientHandlerRef | null;
+  /** Pour `client_call` : nom + position du handler d'échec. */
+  failure_handler?: ClientHandlerRef | null;
+  /** Pour `client_call` : texte de l'argument passé à withUserObject(). */
+  user_object?: string | null;
+  /** Pour `client_call` : textes des arguments serveur. */
+  arguments_text?: string[];
+  /** Pour `scriptlet` : type de scriptlet (`<? ?>`, `<?= ?>`, `<?!= ?>`). */
+  scriptlet_kind?: ScriptletKindLabel;
+}
+
+export interface CallerInfo {
+  file: string;
+  line: number;
+  caller: string;
+  arguments_text: string[];
+  return_used_as: string | null;
+  /** Pour un caller cross-project, le nom du projet appelant. Absent = même projet. */
+  caller_project?: string;
+}
+
+export interface PendingLibraryCall {
+  library_prefix: string;
+  method: string;
+  caller_function: string;
+  caller_file: string;
+  caller_line: number;
+  caller_arguments: string[];
+  return_used_as: string | null;
+}
+
+export interface CrossProjectEdge {
+  caller_project: string;
+  caller_function: string;
+  caller_file: string;
+  caller_line: number;
+  callee_project: string;
+  callee_function: string;
+  library_prefix: string;
+}
+
+export interface CoverageNote {
+  what: string;
+  where: string;
+  reason: string;
+  suggestion?: string;
+}
+
+export interface Coverage {
+  resolved_pct: number;
+  confidence: 'high' | 'medium' | 'low';
+  unresolved: CoverageNote[];
+  external_boundaries: string[];
+}
+
+export interface FieldRead {
+  field: string;
+  handler: string;
+  file: string;
+  line: number;
+}
+
+export interface InferredContract {
+  /** Champs lus par les successHandler connus sur la valeur de retour. */
+  return_shape: {
+    fields_read: FieldRead[];
+    field_names: string[];
+    source: 'success_handler_consumption';
+  } | null;
+  /** Champs lus par les failureHandler connus sur l'objet erreur. */
+  failure_signal: {
+    fields_read: FieldRead[];
+    field_names: string[];
+  } | null;
+  /** Handlers non analysés (inline, externes, lookup raté). */
+  unresolved_handlers: Array<{
+    kind: 'success' | 'failure';
+    reason: string;
+    where: string;
+  }>;
+}
+
+export interface PositionRef {
+  file: string;
+  line: number;
+}
+
+export interface DestructuringContract {
+  at: PositionRef;
+  pattern: string;
+  arity: number;
+  /** Nom de la fonction bound (si valeur = `bare_identifier(...)`), sinon null. */
+  bound_to: string | null;
+}
+
+export type PropertyStore =
+  | 'script'
+  | 'user'
+  | 'document'
+  | 'cache_script'
+  | 'cache_user'
+  | 'cache_document';
+
+export interface PropertyKeyAccess {
+  /** Clé littérale string ; null si l'argument n'est pas un string literal. */
+  key: string | null;
+  key_text: string;
+  op: 'read' | 'write' | 'delete';
+  store: PropertyStore;
+  at: PositionRef;
+}
+
+export interface Array2dAccess {
+  /** Nom de la variable qui porte le tableau 2D. */
+  variable: string;
+  /** Texte brut de l'expression source (ex: `sheet.getDataRange().getValues()`). */
+  source: string;
+  defined_at: PositionRef;
+  /** Indices de colonne lus (uniques, triés). */
+  column_indices_read: number[];
+  /** max(column_indices_read). */
+  max_index: number;
+  /** Méthodes par lesquelles les lignes sont accédées (`map`, `forEach`…). */
+  via: string[];
+}
+
+export interface TemplateBinding {
+  /** Nom du fichier template tel que résolu (ex: `dashboard.html`). */
+  template_file: string;
+  template_var: string;
+  assigned_at: PositionRef;
+  data_fields_set: string[];
+  data_fields_read_in_scriptlets: string[];
+  /** Champs définis côté serveur mais jamais lus dans le template. */
+  unread_data_fields: string[];
+  /** Champs lus dans le template mais jamais définis côté serveur. */
+  read_but_not_set: string[];
+}
+
+export interface FunctionPatterns {
+  destructuring_contracts: DestructuringContract[];
+  property_keys: PropertyKeyAccess[];
+  array2d_access: Array2dAccess[];
+  template_bindings: TemplateBinding[];
+}
+
+export interface FunctionRecord {
+  id: string;
+  name: string;
+  project: string;
+  definition: FunctionDefinition;
+  exposures: Exposure[];
+  calls_out: string[];
+  called_by: CallerInfo[];
+  inferred_contract: InferredContract | null;
+  patterns: FunctionPatterns;
+  return_analysis: ReturnAnalysis;
+  coverage: Coverage;
+}
+
+export interface PropertyKeyEntry {
+  key: string;
+  store: PropertyStore;
+  reads: Array<PositionRef & { function: string }>;
+  writes: Array<PositionRef & { function: string }>;
+  deletes: Array<PositionRef & { function: string }>;
+  /** `write_only` = jamais lue ; `read_only` = jamais écrite ; `ok` sinon. */
+  status: 'ok' | 'write_only' | 'read_only';
+}
+
+export interface ProjectCoverageSummary {
+  resolved_pct: number;
+  confidence: 'high' | 'medium' | 'low';
+  total_unresolved: number;
+  unresolved_by_kind: Record<string, number>;
+  functions_with_open_returns: string[];
+  functions_with_dynamic_dispatch: string[];
+  functions_with_non_serializable_returns: string[];
+}
+
+export interface ProjectIndex {
+  /** Discriminant pour les outils consommateurs (`workspace` ailleurs). */
+  kind?: 'project';
+  project: string;
+  root: string;
+  scanned_at: string;
+  files: string[];
+  functions: FunctionRecord[];
+  /** Index des clés PropertiesService/CacheService au niveau projet. */
+  property_keys: PropertyKeyEntry[];
+  /** Appels `Lib.fn()` avec un préfixe déclaré en manifeste mais non encore résolus. */
+  pending_library_calls: PendingLibraryCall[];
+  /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */
+  coverage_summary: ProjectCoverageSummary;
+  unresolved_calls: UnresolvedCall[];
+}
+
+export interface WorkspaceIndex {
+  kind: 'workspace';
+  workspace_root: string;
+  scanned_at: string;
+  projects: ProjectIndex[];
+  cross_project_edges: CrossProjectEdge[];
+}
+
+export interface UnresolvedCall {
+  file: string;
+  line: number;
+  callee_text: string;
+  reason: string;
+}

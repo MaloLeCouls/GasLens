@@ -1,0 +1,17 @@
+{
+  "name": "nullability-introduced",
+  "description": "Un agent introduit un retour null dans sendEmailReport sur une condition d'erreur. Le handler onSendOk lit result.success et result.messageId sans garde → WARN nullability avec confidence=medium.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "function sendEmailReport(reportData, recipients) {\n  const body = formatReport(reportData);",
+      "after": "function sendEmailReport(reportData, recipients) {\n  if (!recipients || recipients.length === 0) return null;\n  const body = formatReport(reportData);"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "derived_kinds": ["return.nullability_changed"],
+    "breaks_min": 0
+  }
+}

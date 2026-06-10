@@ -1,0 +1,20 @@
+{
+  "name": "serializable-broke",
+  "description": "Un agent change le retour de sendEmailReport pour un `new BigPayload()`. Le retour est non-sérialisable → BREAK serializable.broke sur le client_call dashboard.html.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "  const id = generateId_();\n  return { success: true, messageId: id };",
+      "after": "  function BigPayload() { this.x = 1; }\n  return new BigPayload();"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "derived_kinds": ["serializable.broke"],
+    "breaks_min": 1,
+    "breaks_must_include": [
+      { "file": "dashboard.html", "consumer_kind": "client_call.invocation" }
+    ]
+  }
+}

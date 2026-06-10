@@ -1,0 +1,29 @@
+{
+  "name": "remove-return-field-messageId",
+  "description": "Un agent retire messageId du retour de sendEmailReport (JSDoc + return). dashboard.html:onSendOk lit toujours result.messageId → BREAK attendu.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "@returns {{success: boolean, messageId: string}}",
+      "after": "@returns {{success: boolean}}"
+    },
+    {
+      "file": "email.gs",
+      "before_contains": "return { success: true, messageId: id };",
+      "after": "return { success: true };"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "derived_kinds": ["return.field_removed"],
+    "breaks_min": 1,
+    "breaks_must_include": [
+      {
+        "file": "dashboard.html",
+        "reason_substring": "messageId",
+        "consumer_kind": "client_call.success_handler"
+      }
+    ]
+  }
+}

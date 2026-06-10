@@ -1,0 +1,25 @@
+{
+  "name": "rename-sendEmailReport",
+  "description": "Un agent renomme sendEmailReport en dispatchReport SANS mettre à jour ses 2 callers internes ni le site google.script.run. Le body_fingerprint doit détecter le rename, et tous les consommateurs encore référençant l'ancien nom doivent être flaggés en BREAK.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "function sendEmailReport(reportData, recipients) {",
+      "after": "function dispatchReport(reportData, recipients) {"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "derived_kinds": ["function_renamed"],
+    "breaks_min": 3,
+    "breaks_must_include": [
+      { "file": "triggers.gs", "consumer_kind": "internal_caller" },
+      {
+        "file": "dashboard.html",
+        "consumer_kind": "client_call.invocation",
+        "reason_substring": "sendEmailReport"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "template-data-field-removed",
+  "description": "Un agent retire 'userName' de tpl.data dans doGet. dashboard.html lit toujours data.userName dans un scriptlet → BREAK template_scriptlet_reader.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "triggers.gs",
+      "before_contains": "tpl.data = { userName: getUserName_(), items: listItems() };",
+      "after": "tpl.data = { items: listItems() };"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "derived_kinds": ["template.binding_field_removed"],
+    "breaks_min": 1,
+    "breaks_must_include": [
+      { "file": "dashboard.html", "reason_substring": "userName" }
+    ]
+  }
+}

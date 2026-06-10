@@ -1,0 +1,18 @@
+{
+  "timeZone": "Europe/Paris",
+  "dependencies": {
+    "libraries": [
+      {
+        "userSymbol": "CommonUtils",
+        "libraryId": "1abcXYZ-fake-id-for-fixture",
+        "version": "3"
+      }
+    ]
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "webapp": {
+    "executeAs": "USER_DEPLOYING",
+    "access": "ANYONE"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.gaslens/
+*.log
+.DS_Store
+coverage/
+.vscode/
+.idea/

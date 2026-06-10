@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= include('styles') ?>
+  </head>
+  <body>
+    <h1>Bonjour <?= data.userName ?></h1>
+    <ul>
+      <? for (var i = 0; i < data.items.length; i++) { ?>
+        <li><?= data.items[i].name ?> — <?= data.items[i].qty ?></li>
+      <? } ?>
+    </ul>
+    <button id="send">Envoyer le rapport</button>
+    <script>
+      function onSendOk(result) {
+        console.log('ok', result.success, result.messageId);
+      }
+      function onSendErr(err) {
+        console.error(err);
+      }
+      document.getElementById('send').addEventListener('click', function () {
+        google.script.run
+          .withSuccessHandler(onSendOk)
+          .withFailureHandler(onSendErr)
+          .sendEmailReport({ foo: 1 }, ['user@example.com']);
+      });
+    </script>
+  </body>
+</html>

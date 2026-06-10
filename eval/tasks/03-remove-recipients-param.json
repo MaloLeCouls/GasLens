@@ -1,0 +1,20 @@
+{
+  "name": "remove-recipients-param",
+  "description": "Un agent retire le paramètre 'recipients' de sendEmailReport. Les 2 callers internes et le google.script.run passent toujours un 2e argument → 3 BREAKs.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "function sendEmailReport(reportData, recipients) {",
+      "after": "function sendEmailReport(reportData) {"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "derived_kinds": ["param.removed"],
+    "breaks_min": 3,
+    "breaks_must_include": [
+      { "file": "dashboard.html", "consumer_kind": "client_call.invocation" }
+    ]
+  }
+}
