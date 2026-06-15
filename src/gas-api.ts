@@ -18,6 +18,16 @@
 
 export interface MethodSig {
   returns: string;
+  /**
+   * Arity attendue (inclusive). Optionnel — quand absent, validate-api
+   * n'émet PAS de check d'arity (doctrine d'honnêteté : pas de faux
+   * positif sur les overloads).
+   *
+   * Renseigné seulement pour les méthodes à arity fixe ou bien bornée.
+   * Les méthodes très overloadées (`Range.getRange(...)` 1-4 args avec
+   * sémantique différente) restent sans arity.
+   */
+  arity?: { min: number; max: number };
 }
 
 export type GasApiRegistry = Record<string, Record<string, MethodSig>>;
@@ -647,3 +657,329 @@ export const GAS_API: GasApiRegistry = {
 export const GAS_API_SERVICE_ROOTS = new Set<string>(
   Object.keys(GAS_API).filter((k) => /^(?:[A-Z][a-z]+)+(?:App|Service)$|^(?:ScriptApp|Utilities|Session|Logger|MailApp)$/.test(k)),
 );
+
+/**
+ * Couche d'**arity** appliquée par dessus GAS_API. Séparée pour ne pas
+ * polluer le registre principal, et pour qu'on puisse étendre l'arity
+ * sans toucher au reste.
+ *
+ * Doctrine : ne renseigner que les méthodes à arity *fixe ou bien bornée*.
+ * Les overloads avec sémantique différente selon le nombre d'args
+ * (ex: `Sheet.getRange(...)` 1-4 args) restent absents — validate-api ne
+ * les vérifiera pas, plutôt que d'inventer un seuil arbitraire.
+ *
+ * Phase 1 — focus sur les patterns de bug réels (« j'ai oublié un arg »).
+ */
+export const GAS_API_ARITY: Record<
+  string,
+  Record<string, { min: number; max: number }>
+> = {
+  SpreadsheetApp: {
+    openById: { min: 1, max: 1 },
+    openByUrl: { min: 1, max: 1 },
+    open: { min: 1, max: 1 },
+    flush: { min: 0, max: 0 },
+    getActive: { min: 0, max: 0 },
+    getActiveSpreadsheet: { min: 0, max: 0 },
+    getActiveSheet: { min: 0, max: 0 },
+  },
+  Spreadsheet: {
+    rename: { min: 1, max: 1 },
+    getSheetByName: { min: 1, max: 1 },
+    deleteSheet: { min: 1, max: 1 },
+    setActiveSheet: { min: 1, max: 1 },
+    moveActiveSheet: { min: 1, max: 1 },
+    deleteRow: { min: 1, max: 1 },
+    deleteColumn: { min: 1, max: 1 },
+    getSheets: { min: 0, max: 0 },
+    getNumSheets: { min: 0, max: 0 },
+    getId: { min: 0, max: 0 },
+    getName: { min: 0, max: 0 },
+    getUrl: { min: 0, max: 0 },
+    getDataRange: { min: 0, max: 0 },
+    getLastRow: { min: 0, max: 0 },
+    getLastColumn: { min: 0, max: 0 },
+  },
+  Sheet: {
+    setName: { min: 1, max: 1 },
+    appendRow: { min: 1, max: 1 },
+    copyTo: { min: 1, max: 1 },
+    setFrozenRows: { min: 1, max: 1 },
+    setFrozenColumns: { min: 1, max: 1 },
+    activate: { min: 0, max: 0 },
+    clear: { min: 0, max: 1 },
+    clearContents: { min: 0, max: 0 },
+    clearFormats: { min: 0, max: 0 },
+    clearNotes: { min: 0, max: 0 },
+    getDataRange: { min: 0, max: 0 },
+    getLastRow: { min: 0, max: 0 },
+    getLastColumn: { min: 0, max: 0 },
+    getMaxRows: { min: 0, max: 0 },
+    getMaxColumns: { min: 0, max: 0 },
+    getName: { min: 0, max: 0 },
+    getSheetId: { min: 0, max: 0 },
+    getIndex: { min: 0, max: 0 },
+    getParent: { min: 0, max: 0 },
+    getFrozenRows: { min: 0, max: 0 },
+    getFrozenColumns: { min: 0, max: 0 },
+  },
+  Range: {
+    setValue: { min: 1, max: 1 },
+    setValues: { min: 1, max: 1 },
+    setFormula: { min: 1, max: 1 },
+    setFormulas: { min: 1, max: 1 },
+    setFormulaR1C1: { min: 1, max: 1 },
+    setNote: { min: 1, max: 1 },
+    setNotes: { min: 1, max: 1 },
+    setBackground: { min: 1, max: 1 },
+    setBackgrounds: { min: 1, max: 1 },
+    setBackgroundRGB: { min: 3, max: 3 },
+    setFontColor: { min: 1, max: 1 },
+    setFontColors: { min: 1, max: 1 },
+    setFontWeight: { min: 1, max: 1 },
+    setFontWeights: { min: 1, max: 1 },
+    setFontStyle: { min: 1, max: 1 },
+    setFontSize: { min: 1, max: 1 },
+    setFontFamily: { min: 1, max: 1 },
+    setNumberFormat: { min: 1, max: 1 },
+    setNumberFormats: { min: 1, max: 1 },
+    setHorizontalAlignment: { min: 1, max: 1 },
+    setVerticalAlignment: { min: 1, max: 1 },
+    setWrap: { min: 1, max: 1 },
+    setWraps: { min: 1, max: 1 },
+    setWrapStrategy: { min: 1, max: 1 },
+    setVerticalText: { min: 1, max: 1 },
+    setTextRotation: { min: 1, max: 1 },
+    setTextDirection: { min: 1, max: 1 },
+    setDataValidation: { min: 1, max: 1 },
+    getCell: { min: 2, max: 2 },
+    getValue: { min: 0, max: 0 },
+    getValues: { min: 0, max: 0 },
+    getDisplayValue: { min: 0, max: 0 },
+    getDisplayValues: { min: 0, max: 0 },
+    getFormula: { min: 0, max: 0 },
+    getFormulas: { min: 0, max: 0 },
+    getFormulaR1C1: { min: 0, max: 0 },
+    getA1Notation: { min: 0, max: 0 },
+    getRow: { min: 0, max: 0 },
+    getColumn: { min: 0, max: 0 },
+    getLastRow: { min: 0, max: 0 },
+    getLastColumn: { min: 0, max: 0 },
+    getNumRows: { min: 0, max: 0 },
+    getNumColumns: { min: 0, max: 0 },
+    getHeight: { min: 0, max: 0 },
+    getWidth: { min: 0, max: 0 },
+    getSheet: { min: 0, max: 0 },
+    getBackground: { min: 0, max: 0 },
+    getFontColor: { min: 0, max: 0 },
+    getNote: { min: 0, max: 0 },
+    clear: { min: 0, max: 1 },
+    clearContent: { min: 0, max: 0 },
+    clearFormat: { min: 0, max: 0 },
+    clearNote: { min: 0, max: 0 },
+    isBlank: { min: 0, max: 0 },
+    isPartOfMerge: { min: 0, max: 0 },
+    isChecked: { min: 0, max: 0 },
+    check: { min: 0, max: 0 },
+    uncheck: { min: 0, max: 0 },
+  },
+  DriveApp: {
+    getFolderById: { min: 1, max: 1 },
+    getFileById: { min: 1, max: 1 },
+    getFoldersByName: { min: 1, max: 1 },
+    getFilesByName: { min: 1, max: 1 },
+    getFilesByType: { min: 1, max: 1 },
+    getRootFolder: { min: 0, max: 0 },
+    getFiles: { min: 0, max: 0 },
+    getFolders: { min: 0, max: 0 },
+    getStorageUsed: { min: 0, max: 0 },
+    getStorageLimit: { min: 0, max: 0 },
+  },
+  Folder: {
+    setName: { min: 1, max: 1 },
+    setDescription: { min: 1, max: 1 },
+    moveTo: { min: 1, max: 1 },
+    setStarred: { min: 1, max: 1 },
+    setTrashed: { min: 1, max: 1 },
+    getId: { min: 0, max: 0 },
+    getName: { min: 0, max: 0 },
+    getUrl: { min: 0, max: 0 },
+    getDescription: { min: 0, max: 0 },
+    isStarred: { min: 0, max: 0 },
+    isTrashed: { min: 0, max: 0 },
+    getSize: { min: 0, max: 0 },
+  },
+  File: {
+    setName: { min: 1, max: 1 },
+    setDescription: { min: 1, max: 1 },
+    moveTo: { min: 1, max: 1 },
+    setStarred: { min: 1, max: 1 },
+    setTrashed: { min: 1, max: 1 },
+    setContent: { min: 1, max: 1 },
+    getId: { min: 0, max: 0 },
+    getName: { min: 0, max: 0 },
+    getUrl: { min: 0, max: 0 },
+    getBlob: { min: 0, max: 0 },
+    getMimeType: { min: 0, max: 0 },
+    getSize: { min: 0, max: 0 },
+    getDownloadUrl: { min: 0, max: 0 },
+    isStarred: { min: 0, max: 0 },
+    isTrashed: { min: 0, max: 0 },
+  },
+  PropertiesService: {
+    getScriptProperties: { min: 0, max: 0 },
+    getUserProperties: { min: 0, max: 0 },
+    getDocumentProperties: { min: 0, max: 0 },
+  },
+  Properties: {
+    getProperty: { min: 1, max: 1 },
+    setProperty: { min: 2, max: 2 },
+    setProperties: { min: 1, max: 2 },
+    deleteProperty: { min: 1, max: 1 },
+    deleteAllProperties: { min: 0, max: 0 },
+    getKeys: { min: 0, max: 0 },
+    getProperties: { min: 0, max: 0 },
+  },
+  CacheService: {
+    getScriptCache: { min: 0, max: 0 },
+    getUserCache: { min: 0, max: 0 },
+    getDocumentCache: { min: 0, max: 0 },
+  },
+  Cache: {
+    get: { min: 1, max: 1 },
+    getAll: { min: 1, max: 1 },
+    put: { min: 2, max: 3 },
+    putAll: { min: 1, max: 2 },
+    remove: { min: 1, max: 1 },
+    removeAll: { min: 1, max: 1 },
+  },
+  LockService: {
+    getScriptLock: { min: 0, max: 0 },
+    getUserLock: { min: 0, max: 0 },
+    getDocumentLock: { min: 0, max: 0 },
+  },
+  Lock: {
+    tryLock: { min: 1, max: 1 },
+    waitLock: { min: 1, max: 1 },
+    hasLock: { min: 0, max: 0 },
+    releaseLock: { min: 0, max: 0 },
+  },
+  ScriptApp: {
+    newTrigger: { min: 1, max: 1 },
+    deleteTrigger: { min: 1, max: 1 },
+    getProjectTriggers: { min: 0, max: 0 },
+    getUserTriggers: { min: 1, max: 1 },
+    getScriptId: { min: 0, max: 0 },
+    getOAuthToken: { min: 0, max: 0 },
+    invalidateAuth: { min: 0, max: 0 },
+  },
+  ClockTriggerBuilder: {
+    after: { min: 1, max: 1 },
+    atHour: { min: 1, max: 1 },
+    everyMinutes: { min: 1, max: 1 },
+    everyHours: { min: 1, max: 1 },
+    everyDays: { min: 1, max: 1 },
+    everyWeeks: { min: 1, max: 1 },
+    onMonthDay: { min: 1, max: 1 },
+    onWeekDay: { min: 1, max: 1 },
+    nearMinute: { min: 1, max: 1 },
+    inTimezone: { min: 1, max: 1 },
+    timeBased: { min: 0, max: 0 },
+    create: { min: 0, max: 0 },
+  },
+  Utilities: {
+    getUuid: { min: 0, max: 0 },
+    sleep: { min: 1, max: 1 },
+    formatDate: { min: 3, max: 3 },
+    base64Encode: { min: 1, max: 2 },
+    base64EncodeWebSafe: { min: 1, max: 2 },
+    base64Decode: { min: 1, max: 2 },
+    base64DecodeWebSafe: { min: 1, max: 2 },
+    parseCsv: { min: 1, max: 2 },
+    jsonStringify: { min: 1, max: 1 },
+    jsonParse: { min: 1, max: 1 },
+    ungzip: { min: 1, max: 1 },
+  },
+  Session: {
+    getActiveUser: { min: 0, max: 0 },
+    getEffectiveUser: { min: 0, max: 0 },
+    getActiveUserLocale: { min: 0, max: 0 },
+    getScriptTimeZone: { min: 0, max: 0 },
+    getTimeZone: { min: 0, max: 0 },
+    getTemporaryActiveUserKey: { min: 0, max: 0 },
+  },
+  User: {
+    getEmail: { min: 0, max: 0 },
+    getUserLoginId: { min: 0, max: 0 },
+  },
+  HtmlService: {
+    createHtmlOutput: { min: 0, max: 1 },
+    createHtmlOutputFromFile: { min: 1, max: 1 },
+    createTemplate: { min: 1, max: 1 },
+    createTemplateFromFile: { min: 1, max: 1 },
+    getUserAgent: { min: 0, max: 0 },
+  },
+  HtmlOutput: {
+    setContent: { min: 1, max: 1 },
+    setTitle: { min: 1, max: 1 },
+    setFaviconUrl: { min: 1, max: 1 },
+    setSandboxMode: { min: 1, max: 1 },
+    setHeight: { min: 1, max: 1 },
+    setWidth: { min: 1, max: 1 },
+    setXFrameOptionsMode: { min: 1, max: 1 },
+    append: { min: 1, max: 1 },
+    appendUntrusted: { min: 1, max: 1 },
+    addMetaTag: { min: 2, max: 2 },
+    clear: { min: 0, max: 0 },
+    getContent: { min: 0, max: 0 },
+    getTitle: { min: 0, max: 0 },
+  },
+  HtmlTemplate: {
+    evaluate: { min: 0, max: 0 },
+    getCode: { min: 0, max: 0 },
+    getRawContent: { min: 0, max: 0 },
+  },
+  ContentService: {
+    createTextOutput: { min: 0, max: 1 },
+  },
+  TextOutput: {
+    append: { min: 1, max: 1 },
+    setContent: { min: 1, max: 1 },
+    setMimeType: { min: 1, max: 1 },
+    downloadAsFile: { min: 1, max: 1 },
+    clear: { min: 0, max: 0 },
+    getContent: { min: 0, max: 0 },
+    getFileName: { min: 0, max: 0 },
+  },
+  UrlFetchApp: {
+    fetch: { min: 1, max: 2 },
+    fetchAll: { min: 1, max: 1 },
+    getRequest: { min: 1, max: 2 },
+  },
+  HTTPResponse: {
+    getAllHeaders: { min: 0, max: 0 },
+    getBlob: { min: 0, max: 0 },
+    getContent: { min: 0, max: 0 },
+    getContentText: { min: 0, max: 1 },
+    getHeaders: { min: 0, max: 0 },
+    getResponseCode: { min: 0, max: 0 },
+  },
+  Logger: {
+    log: { min: 1, max: 99 },
+    clear: { min: 0, max: 0 },
+    getLog: { min: 0, max: 0 },
+  },
+};
+
+/**
+ * Renvoie l'arity attendue pour `type.method`, ou null si on ne sait pas
+ * (validate-api s'abstient alors honnêtement).
+ */
+export function getMethodArity(
+  type: string,
+  method: string,
+): { min: number; max: number } | null {
+  const t = GAS_API_ARITY[type];
+  if (!t) return null;
+  return t[method] ?? null;
+}

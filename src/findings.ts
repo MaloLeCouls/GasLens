@@ -23,6 +23,7 @@ export type ConsumerKind =
   | 'manifest.scope'
   | 'manifest.urlfetch_whitelist'
   | 'api.unknown_method'
+  | 'api.wrong_arity'
   | 'lint.quota_in_loop'
   | 'lint.urlfetch_in_loop'
   | 'lint.lock_no_finally'

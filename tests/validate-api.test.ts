@@ -171,6 +171,112 @@ describe('validate-api — chaînes builder GAS (cas terrain)', () => {
   });
 });
 
+describe('validate-api — api.wrong_arity', () => {
+  it('BREAK quand Properties.setProperty est appelée avec 1 arg (manque value)', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() { PropertiesService.getScriptProperties().setProperty('k'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('BREAK');
+      const e = report.entries[0]!;
+      expect(e.kind).toBe('api.wrong_arity');
+      expect(e.method).toBe('setProperty');
+      expect(e.arity_observed).toBe(1);
+      expect(e.arity_expected).toEqual({ min: 2, max: 2 });
+      expect(report.findings[0]?.consumer_kind).toBe('api.wrong_arity');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('BREAK quand ScriptApp.newTrigger() est appelée sans argument', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() { ScriptApp.newTrigger().timeBased().everyHours(1).create(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('BREAK');
+      const e = report.entries[0]!;
+      expect(e.method).toBe('newTrigger');
+      expect(e.arity_observed).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('BREAK quand range.setValue() oublie sa valeur', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        SpreadsheetApp.getActive().getActiveSheet().getRange('A1').setValue();
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      const e = report.entries.find((x) => x.kind === 'api.wrong_arity');
+      expect(e?.method).toBe('setValue');
+      expect(e?.on_type).toBe('Range');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('CLEAN quand l\'arity est correcte', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        PropertiesService.getScriptProperties().setProperty('k', 'v');
+        ScriptApp.newTrigger('runJob').timeBased().everyHours(1).create();
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('CLEAN');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ne flag pas trop d'arguments (JS les ignore en silence)", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        Utilities.getUuid('extra-arg-ignored');
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.entries.filter((e) => e.kind === 'api.wrong_arity')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ne flag pas les méthodes sans arity dans le registre (silencieux par honnêteté)", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      // Sheet.getRange est overloadée (1-4 args), donc absente de GAS_API_ARITY.
+      // L'appel à 5 args ne doit PAS lever — on s'abstient plutôt que d'inventer.
+      'main.gs': `function go() { SpreadsheetApp.getActive().getActiveSheet().getRange(1, 1, 1, 1).getValue(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('CLEAN');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('validate-api — rendu texte', () => {
   it("inclut project, verdict, méthode hallucinée et suggestion", async () => {
     const root = await makeProject({

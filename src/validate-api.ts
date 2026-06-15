@@ -1,19 +1,22 @@
-import { GAS_API, GAS_API_SERVICE_ROOTS } from './gas-api.js';
+import { GAS_API, GAS_API_SERVICE_ROOTS, getMethodArity } from './gas-api.js';
 import type { Finding, Verdict } from './findings.js';
 import { aggregateVerdict } from './findings.js';
 import type { ApiCallChainRecord, ProjectIndex } from './types.js';
 
 export interface ApiValidationEntry {
-  kind: 'api.unknown_method';
+  kind: 'api.unknown_method' | 'api.wrong_arity';
   severity: 'break';
   /** Type registre où la méthode est introuvable (ex: 'Sheet', 'Range'). */
   on_type: string;
-  /** Méthode hallucinée. */
+  /** Méthode hallucinée ou mal appelée. */
   method: string;
   /** Préfixe résolu de la chaîne avant l'erreur (texte) — ex: 'SpreadsheetApp.getActive()'. */
   resolved_prefix: string;
-  /** Suggestions de noms proches dans le type. */
+  /** Suggestions de noms proches dans le type (uniquement pour unknown_method). */
   suggestions: string[];
+  /** Renseigné pour api.wrong_arity uniquement : ce que l'appel a passé vs ce qui est attendu. */
+  arity_observed?: number;
+  arity_expected?: { min: number; max: number };
   call_site: { file: string; line: number; function: string };
 }
 
@@ -87,6 +90,30 @@ export function validateApi(index: ProjectIndex): ApiValidationReport {
         findings.push(toFinding(entry, index.project));
         break;
       }
+      // Arity check (V3 §21.2, phase 2) — uniquement si l'arity est connue
+      // ET seulement « trop peu d'args » (forgot arg). On ne flag pas
+      // « trop d'args » : JS les ignore en silence, et GAS aussi.
+      const expectedArity = getMethodArity(currentType, m.name);
+      if (expectedArity !== null && m.arity < expectedArity.min) {
+        const entry: ApiValidationEntry = {
+          kind: 'api.wrong_arity',
+          severity: 'break',
+          on_type: currentType,
+          method: m.name,
+          resolved_prefix: resolvedPrefix,
+          suggestions: [],
+          arity_observed: m.arity,
+          arity_expected: expectedArity,
+          call_site: {
+            file: chain.file,
+            line: m.line,
+            function: chain.function,
+          },
+        };
+        entries.push(entry);
+        findings.push(toFinding(entry, index.project));
+        break;
+      }
       resolvedPrefix = `${resolvedPrefix}.${m.name}()`;
       currentType = sig.returns;
     }
@@ -110,6 +137,25 @@ export function validateApi(index: ProjectIndex): ApiValidationReport {
 }
 
 function toFinding(entry: ApiValidationEntry, project: string): Finding {
+  if (entry.kind === 'api.wrong_arity') {
+    const obs = entry.arity_observed ?? 0;
+    const exp = entry.arity_expected ?? { min: 0, max: 0 };
+    const expectedText =
+      exp.min === exp.max ? `${exp.min}` : `${exp.min}-${exp.max}`;
+    return {
+      severity: 'break',
+      symbol: `${project}::api::${entry.on_type}.${entry.method}`,
+      consumer: { file: entry.call_site.file, line: entry.call_site.line },
+      consumer_kind: 'api.wrong_arity',
+      reason:
+        `'${entry.on_type}.${entry.method}' appelée avec ${obs} argument${obs > 1 ? 's' : ''}, ` +
+        `attendu ${expectedText} (appel '${entry.resolved_prefix}.${entry.method}' depuis '${entry.call_site.function}')`,
+      fix_hint:
+        `consulter la signature de '${entry.on_type}.${entry.method}' — il manque ` +
+        `${exp.min - obs} argument(s)`,
+      confidence: 'high',
+    };
+  }
   const suggestionTail = entry.suggestions.length
     ? ` — proche(s) : ${entry.suggestions.map((s) => `'${s}'`).join(', ')}`
     : '';
@@ -189,6 +235,16 @@ export function renderApiValidationText(report: ApiValidationReport): string {
   );
   for (const e of report.entries) {
     const sites = `${e.call_site.file}:${e.call_site.line}`;
+    if (e.kind === 'api.wrong_arity') {
+      const exp = e.arity_expected ?? { min: 0, max: 0 };
+      const expectedText = exp.min === exp.max ? `${exp.min}` : `${exp.min}-${exp.max}`;
+      lines.push(
+        `  BREAK  api.wrong_arity     ${e.on_type}.${e.method}  @ ${sites}  ` +
+          `(observed=${e.arity_observed} expected=${expectedText})`,
+      );
+      lines.push(`        prefix: ${e.resolved_prefix}.${e.method}`);
+      continue;
+    }
     const suggest = e.suggestions.length ? `  → ${e.suggestions.join(', ')}` : '';
     lines.push(
       `  BREAK  api.unknown_method  ${e.on_type}.${e.method}  @ ${sites}${suggest}`,

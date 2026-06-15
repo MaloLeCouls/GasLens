@@ -60,7 +60,7 @@ src/
   manifest-analysis.ts         croise code ↔ manifeste (V3 §21.1) : library.undeclared/.unused, advanced_service.missing/.unused, scope.missing/.unused, urlfetch.not_whitelisted
   scopes.ts                    table service GAS → scope(s) OAuth (Gmail/Drive/Spreadsheets/Calendar/UrlFetchApp/Session/…)
   validate-api.ts              valide les chaînes d'appels GAS contre gas-api.ts (V3 §21.2) : api.unknown_method + suggestions fuzzy
-  gas-api.ts                   registre curé Service→Method→ReturnType pour ~15 services natifs (source: doc + @types/google-apps-script)
+  gas-api.ts                   registre curé Service→Method→ReturnType pour ~15 services natifs (source: doc + @types/google-apps-script) ; couche d'arity séparée (GAS_API_ARITY) pour api.wrong_arity
   lint-runtime.ts              lint heuristique GAS-aware (V3 §21.3) : quota.value_in_loop, urlfetch.in_loop, lock.no_finally, trigger.orphan
   lint-webapp.ts               lint des .html servis (V3 §21.4) : webapp.mixed_content, webapp.link_target, webapp.form_submit
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
@@ -95,7 +95,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~231 tests)
+npm test             # vitest run  (doit rester vert ; ~237 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -121,7 +121,7 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 
 `manifest` (V3 §21.1) — Phases 1 + 2 livrées : `library.undeclared/.unused`, `advanced_service.missing/.unused` (phase 1, confidence high), `scope.missing/.unused` (WARN/INFO, confidence medium, **silencieux quand `oauthScopes` n'est pas explicite** car l'auto-détection Google joue), `urlfetch.not_whitelisted` (WARN, **silencieux quand `urlFetchWhitelist` est absent**, URLs littérales seulement). Câblé dans `check` via `enrichWithManifestFindings`. Table service→scope dans `scopes.ts`. **Restent** : `scope.over_broad` (info, prudent), gestion de `@OnlyCurrentDoc`.
 
-`validate-api` (V3 §21.2) — Phase 1 livrée : `api.unknown_method` (BREAK) + suggestions fuzzy. Registre curé dans `gas-api.ts` (~15 services, ~400 méthodes). Honnête : s'arrête sur les types `unknown` ou tableaux (pas de faux positif). Câblé dans `check` via `enrichWithApiFindings`. **À étendre** : `api.wrong_arity` (registre stocke déjà l'arity grossière côté chaîne, manque côté registre), `api.deprecated` (méthodes Rhino-only sous V8).
+`validate-api` (V3 §21.2) — Phases 1 + 2 livrées : `api.unknown_method` (BREAK) + suggestions fuzzy, `api.wrong_arity` (BREAK, seulement « trop peu d'args » — on ne flag pas le trop, JS ignore en silence). Registre curé `gas-api.ts` (~15 services, ~400 méthodes ; couche arity séparée `GAS_API_ARITY` avec ~120 entrées). Honnête : s'arrête sur les types `unknown`/tableaux, et s'abstient sur les méthodes overloadées (Sheet.getRange…) plutôt que d'inventer. Câblé dans `check` via `enrichWithApiFindings`. **Reste** : `api.deprecated` (méthodes Rhino-only sous V8).
 
 `lint-runtime` (V3 §21.3) — Phase 1 livrée (WARN/INFO, jamais BREAK) : `quota.value_in_loop` (getValue/setValue/appendRow/… dans for/while/forEach/map), `urlfetch.in_loop` (suggère fetchAll), `lock.no_finally` (waitLock/tryLock sans releaseLock dans finally du même scope), `trigger.orphan` (INFO niveau projet — newTrigger().create() sans deleteTrigger). Câblé dans `check` via `enrichWithLintRuntimeFindings`. **Restent** : `longrun.no_state` (heuristique 6 min, peu net pour V1).
 

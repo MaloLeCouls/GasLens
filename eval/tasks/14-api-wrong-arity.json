@@ -1,0 +1,23 @@
+{
+  "name": "api-wrong-arity",
+  "description": "Un agent oublie la valeur d'un setProperty (1 arg au lieu de 2). validate-api doit lever BREAK 'api.wrong_arity' (V3 §21.2 phase 2).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "config.gs",
+      "before_contains": "PropertiesService.getScriptProperties().setProperty('LAST_RUN', new Date().toISOString());",
+      "after": "PropertiesService.getScriptProperties().setProperty('LAST_RUN');"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "breaks_min": 1,
+    "breaks_must_include": [
+      {
+        "file": "config.gs",
+        "reason_substring": "setProperty",
+        "consumer_kind": "api.wrong_arity"
+      }
+    ]
+  }
+}
