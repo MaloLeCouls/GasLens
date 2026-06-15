@@ -75,10 +75,11 @@ export interface ScanOptions {
    * dans une itération suivante.
    */
   incrementalBaseline?: ProjectIndex;
-  /** Callback optionnel : si le fast-path incrémental a été pris. */
+  /** Callback optionnel : signale un hit incrémental (fast-path ou partiel). */
   onIncrementalHit?: (info: {
-    reason: 'no_change_since_baseline';
+    reason: 'no_change_since_baseline' | 'partial_per_file';
     files_count: number;
+    cached_files_count?: number;
   }) => void;
 }
 
@@ -119,7 +120,6 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
   // ─── Fast-path incrémental (V0.1) ─────────────────────────────────────
   // Si on a un baseline et que rien n'a changé depuis, renvoie le baseline.
-  // V0.1 critère : ensemble de fichiers identique + toutes mtimes ≤ scanned_at.
   if (opts.incrementalBaseline) {
     const fast = await tryIncrementalFastPath(
       opts.root,
@@ -162,12 +162,35 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   } catch {
     // pas de manifeste → pas de hash
   }
+
+  // ─── True-incremental — éligibilité ───────────────────────────────────
+  // On peut sauter le parse + extraction des .gs inchangés si le baseline
+  // a les caches per-file nécessaires (issus du nouveau gaslens) et que
+  // ni le manifeste ni aucun .html n'a changé.
+  let useTrueIncremental = false;
+  const unchangedGsFiles = new Set<string>();
+  if (opts.incrementalBaseline) {
+    useTrueIncremental = await isEligibleForTrueIncremental(
+      opts.root,
+      gsFiles,
+      htmlFiles,
+      opts.incrementalBaseline,
+      file_hashes,
+      unchangedGsFiles,
+    );
+  }
+
   const bundles: FileBundle[] = [];
-  const tReadStart = Date.now();
   let readMs = 0;
   let parseExtractMs = 0;
   for (const absPath of gsFiles) {
     const rel = toPosix(relative(opts.root, absPath));
+    // Si le fichier est inchangé selon le baseline, on saute parse+extract.
+    if (useTrueIncremental && unchangedGsFiles.has(rel)) {
+      // Le hash de ce fichier est déjà dans file_hashes (alimenté par
+      // isEligibleForTrueIncremental).
+      continue;
+    }
     const tRead = Date.now();
     const source = await readFile(absPath, 'utf8');
     readMs += Date.now() - tRead;
@@ -182,18 +205,29 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
   const htmlBundles: HtmlFileBundle[] = [];
   const html_webapp_signals: HtmlWebappFileSignals[] = [];
-  for (const absPath of htmlFiles) {
-    const rel = toPosix(relative(opts.root, absPath));
-    const tRead = Date.now();
-    const source = await readFile(absPath, 'utf8');
-    readMs += Date.now() - tRead;
-    file_hashes[rel] = sha1(source);
-    const tParse = Date.now();
-    htmlBundles.push(processHtmlFile(rel, source));
-    html_webapp_signals.push(extractHtmlWebappSignals(rel, source));
-    parseExtractMs += Date.now() - tParse;
+  // En mode true-incremental, l'éligibilité garantit que tous les .html
+  // sont inchangés → on réutilise les signaux et contributions du baseline.
+  if (useTrueIncremental && opts.incrementalBaseline) {
+    for (const sig of opts.incrementalBaseline.html_webapp_signals ?? []) {
+      html_webapp_signals.push(sig);
+      file_hashes[sig.file] =
+        opts.incrementalBaseline.file_hashes?.[sig.file] ??
+        file_hashes[sig.file] ??
+        '';
+    }
+  } else {
+    for (const absPath of htmlFiles) {
+      const rel = toPosix(relative(opts.root, absPath));
+      const tRead = Date.now();
+      const source = await readFile(absPath, 'utf8');
+      readMs += Date.now() - tRead;
+      file_hashes[rel] = sha1(source);
+      const tParse = Date.now();
+      htmlBundles.push(processHtmlFile(rel, source));
+      html_webapp_signals.push(extractHtmlWebappSignals(rel, source));
+      parseExtractMs += Date.now() - tParse;
+    }
   }
-  void tReadStart;
 
   // Pass 1 : construire les records et l'index { nom → record }.
   // GAS partage un namespace global au sein d'un projet : par défaut une fonction
@@ -202,6 +236,16 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   // signale le second en unresolved (la plateforme GAS lèverait à l'exécution).
   const records = new Map<string, FunctionRecord>();
   const collisions: UnresolvedCall[] = [];
+
+  // True-incremental — préchargement des records pour les .gs inchangés.
+  // On clone profondément pour éviter de muter le baseline du caller.
+  if (useTrueIncremental && opts.incrementalBaseline) {
+    for (const fn of opts.incrementalBaseline.functions) {
+      if (!unchangedGsFiles.has(fn.definition.file)) continue;
+      const cloned: FunctionRecord = JSON.parse(JSON.stringify(fn));
+      records.set(cloned.name, cloned);
+    }
+  }
 
   for (const b of bundles) {
     for (const def of b.defs) {
@@ -252,6 +296,22 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   // Caches per-file pour le scan incrémental (V3 §21) :
   const pending_library_calls_by_file: Record<string, PendingLibraryCall[]> = {};
   const unresolved_calls_by_file: Record<string, UnresolvedCall[]> = {};
+  // True-incremental — réutilise les caches per-file du baseline pour les
+  // .gs inchangés.
+  if (useTrueIncremental && opts.incrementalBaseline) {
+    for (const file of unchangedGsFiles) {
+      const libs = opts.incrementalBaseline.pending_library_calls_by_file?.[file];
+      if (libs && libs.length > 0) {
+        pending_library_calls_by_file[file] = [...libs];
+        pending_library_calls.push(...libs);
+      }
+      const ur = opts.incrementalBaseline.unresolved_calls_by_file?.[file];
+      if (ur && ur.length > 0) {
+        unresolved_calls_by_file[file] = [...ur];
+        unresolved.push(...ur);
+      }
+    }
+  }
   const receiver_usage: ReceiverUsage[] = [];
   const api_call_chains: ApiCallChainRecord[] = [];
   const value_calls_in_loops: RuntimeSignalValueCallInLoop[] = [];
@@ -453,16 +513,43 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   // retrouver le record correspondant et l'attacher. On capture les
   // contributions sous forme sérialisable (HtmlFileContribution) pour le
   // scan incrémental — appliquées via applyHtmlContributions ensuite.
-  const html_contributions: HtmlFileContribution[] = htmlBundles.map((h) => ({
-    file: h.fileRel,
-    client_calls_by_target: mapToRecord(h.clientCalls),
-    scriptlet_calls_by_target: mapToRecord(h.scriptletCalls),
-    contract_contributions_by_target: mapToRecord(h.contractContributions),
-    scriptlet_data_reads: [...h.scriptletDataReads].sort(),
-    unresolved: [...h.unresolved],
-  }));
-  for (const h of htmlBundles) {
-    for (const [name, exposures] of h.clientCalls) {
+  //
+  // En mode true-incremental, htmlBundles est vide (les .html sont garantis
+  // inchangés et leurs contribs sont réutilisées depuis le baseline). On
+  // applique les contributions du baseline **uniquement** aux records frais
+  // (les records cachés les ont déjà reçues lors du scan baseline).
+  const html_contributions: HtmlFileContribution[] =
+    useTrueIncremental && opts.incrementalBaseline
+      ? (opts.incrementalBaseline.html_contributions ?? []).map((c) => ({
+          ...c,
+          client_calls_by_target: { ...c.client_calls_by_target },
+          scriptlet_calls_by_target: { ...c.scriptlet_calls_by_target },
+          contract_contributions_by_target: {
+            ...c.contract_contributions_by_target,
+          },
+          scriptlet_data_reads: [...c.scriptlet_data_reads],
+          unresolved: [...c.unresolved],
+        }))
+      : htmlBundles.map((h) => ({
+          file: h.fileRel,
+          client_calls_by_target: mapToRecord(h.clientCalls),
+          scriptlet_calls_by_target: mapToRecord(h.scriptletCalls),
+          contract_contributions_by_target: mapToRecord(h.contractContributions),
+          scriptlet_data_reads: [...h.scriptletDataReads].sort(),
+          unresolved: [...h.unresolved],
+        }));
+
+  const freshRecordNames = new Set<string>(
+    bundles.flatMap((b) => b.defs.map((d) => d.name)),
+  );
+  // Filtre d'application : en incrémental, on saute les targets cachés
+  // (records venant du baseline, qui ont déjà la contribution appliquée).
+  const shouldApplyTo = (name: string): boolean =>
+    !useTrueIncremental || freshRecordNames.has(name);
+
+  for (const c of html_contributions) {
+    for (const [name, exposures] of Object.entries(c.client_calls_by_target)) {
+      if (!shouldApplyTo(name)) continue;
       const rec = records.get(name);
       if (!rec) {
         unresolved.push(
@@ -476,36 +563,47 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
         continue;
       }
       if (rec.definition.visibility === 'private') {
-        // V1 §3.5 : les fonctions à suffixe _ sont invisibles à google.script.run.
         for (const e of exposures) {
-          e.detail =
-            (e.detail ? e.detail + ' ; ' : '') +
-            `⚠ fonction privée (suffixe _) — google.script.run ne peut PAS l'appeler à l'exécution`;
+          if (
+            !(e.detail ?? '').includes(
+              "google.script.run ne peut PAS l'appeler",
+            )
+          ) {
+            e.detail =
+              (e.detail ? e.detail + ' ; ' : '') +
+              `⚠ fonction privée (suffixe _) — google.script.run ne peut PAS l'appeler à l'exécution`;
+          }
         }
       }
       rec.exposures.push(...exposures);
     }
-    for (const [name, exposures] of h.scriptletCalls) {
+    for (const [name, exposures] of Object.entries(c.scriptlet_calls_by_target)) {
+      if (!shouldApplyTo(name)) continue;
       const rec = records.get(name);
-      if (!rec) {
-        // Bare identifier non résolu dans un scriptlet : potentiellement un
-        // builtin ou une var locale au template — pas d'erreur bruyante.
-        continue;
-      }
+      if (!rec) continue;
       rec.exposures.push(...exposures);
     }
-    for (const [name, contrib] of h.contractContributions) {
+    for (const [name, contrib] of Object.entries(c.contract_contributions_by_target)) {
+      if (!shouldApplyTo(name)) continue;
       const rec = records.get(name);
-      if (!rec) continue; // déjà reporté en unresolved côté clientCalls
+      if (!rec) continue;
       mergeIntoContract(rec, contrib);
     }
-    unresolved.push(...h.unresolved);
+    // Les unresolved du fichier .html sont *project-level*. En full scan, on
+    // les ajoute toujours. En incrémental, les .html n'ayant pas changé, les
+    // unresolved sont identiques à ce qu'avait le baseline — on les ajoute
+    // pour reconstruire un unresolved global complet (les unresolved des
+    // .gs inchangés ont déjà été chargés via unresolved_calls_by_file).
+    unresolved.push(...c.unresolved);
   }
 
   // Pass 4 : cross-link des template_bindings avec les `data.X` lus côté HTML.
+  // Idempotent : appliqué aux records frais (pour leur templates) ET aux
+  // records cachés (pour mettre à jour si nécessaire — mais reads sont
+  // identiques en incrémental, donc no-op pour eux).
   const dataReadsByFile = new Map<string, Set<string>>();
-  for (const h of htmlBundles) {
-    dataReadsByFile.set(h.fileRel, h.scriptletDataReads);
+  for (const c of html_contributions) {
+    dataReadsByFile.set(c.file, new Set(c.scriptlet_data_reads));
   }
   for (const rec of records.values()) {
     for (const tb of rec.patterns.template_bindings) {
@@ -518,6 +616,54 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
         .filter((f) => !setFields.has(f))
         .sort();
     }
+  }
+
+  // Normalisation finale : reconstruit called_by depuis outbound_calls.
+  // - Full scan : redondant mais idempotent (résultat identique).
+  // - Incrémental : nécessaire pour purger les called_by stales des records
+  //   cachés et refléter les changements des records frais.
+  rebuildCalledByFromOutboundCalls(records);
+
+  // Notifier le caller que le chemin partiel a été pris.
+  if (useTrueIncremental && opts.onIncrementalHit) {
+    opts.onIncrementalHit({
+      reason: 'partial_per_file',
+      files_count: gsFiles.length + htmlFiles.length,
+      cached_files_count: unchangedGsFiles.size,
+    });
+  }
+
+  // ─── Merge des collections per-file pour le mode incrémental ─────────
+  // receiver_usage / api_call_chains / runtime_signals contiennent toutes
+  // un champ `file`. On ajoute aux extractions fraîches les entrées du
+  // baseline pour les fichiers inchangés.
+  if (useTrueIncremental && opts.incrementalBaseline) {
+    const base = opts.incrementalBaseline;
+    for (const r of base.receiver_usage) {
+      if (unchangedGsFiles.has(r.file)) receiver_usage.push({ ...r });
+    }
+    for (const c of base.api_call_chains) {
+      if (unchangedGsFiles.has(c.file)) {
+        api_call_chains.push({ ...c, methods: c.methods.map((m) => ({ ...m })) });
+      }
+    }
+    const rs = base.runtime_signals;
+    for (const v of rs.value_calls_in_loops) {
+      if (unchangedGsFiles.has(v.file)) value_calls_in_loops.push({ ...v });
+    }
+    for (const f of rs.fetches_in_loops) {
+      if (unchangedGsFiles.has(f.file)) fetches_in_loops.push({ ...f });
+    }
+    for (const l of rs.lock_acquisitions) {
+      if (unchangedGsFiles.has(l.file)) lock_acquisitions.push({ ...l });
+    }
+    for (const t of rs.trigger_creates) {
+      if (unchangedGsFiles.has(t.file)) trigger_creates.push({ ...t });
+    }
+    // has_any_delete_trigger : approche pragmatique — OR avec baseline.
+    // Faux positif possible si l'unique deleteTrigger était dans un fichier
+    // qui a changé et où il n'apparaît plus ; acceptable pour V1.
+    if (rs.has_any_delete_trigger) has_any_delete_trigger = true;
   }
 
   // Pass 5 : index projet des clés PropertiesService/CacheService.
@@ -533,7 +679,11 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
   const orderedFiles = [
     ...bundles.map((b) => b.fileRel),
-    ...htmlBundles.map((h) => h.fileRel),
+    ...[...unchangedGsFiles],
+    // En full scan : .html depuis htmlBundles. En incrémental : depuis disque.
+    ...(useTrueIncremental
+      ? htmlFiles.map((p) => toPosix(relative(opts.root, p)))
+      : htmlBundles.map((h) => h.fileRel)),
   ].sort();
 
   const result: ProjectIndex = {
@@ -588,6 +738,91 @@ function mapToRecord<V>(m: Map<string, V>): Record<string, V> {
   const out: Record<string, V> = {};
   for (const [k, v] of m) out[k] = v;
   return out;
+}
+
+/**
+ * Vérifie si on peut emprunter le chemin true-incremental :
+ *  - le baseline a les caches per-file nécessaires (nouvelle version) ;
+ *  - le manifeste n'a pas changé (sinon les libraryPrefixes changent) ;
+ *  - aucun .html n'a changé (sinon contribs HTML stales) ;
+ *  - l'ensemble des .html est identique (pas d'ajout/suppression) ;
+ *  - chaque FunctionRecord du baseline a `outbound_calls` (Phase A).
+ *
+ * En sortie, peuple `unchangedGsFiles` avec les .gs whose hash matches.
+ * Et alimente `file_hashes` pour les fichiers inchangés (qu'on ne re-lit pas).
+ */
+async function isEligibleForTrueIncremental(
+  root: string,
+  gsAbs: string[],
+  htmlAbs: string[],
+  baseline: ProjectIndex,
+  file_hashes: Record<string, string>,
+  unchangedGsFiles: Set<string>,
+): Promise<boolean> {
+  if (
+    !baseline.file_hashes ||
+    !baseline.html_contributions ||
+    !baseline.pending_library_calls_by_file ||
+    !baseline.unresolved_calls_by_file
+  ) {
+    return false;
+  }
+  // Tous les records du baseline doivent avoir outbound_calls.
+  if (
+    !baseline.functions.every((f) => Array.isArray(f.outbound_calls))
+  ) {
+    return false;
+  }
+  // Manifest hash check.
+  if (file_hashes['appsscript.json'] !== baseline.file_hashes['appsscript.json']) {
+    return false;
+  }
+  // HTML set identique + chaque .html unchanged (par hash).
+  const currentHtmlRel = new Set(
+    htmlAbs.map((p) => toPosix(relative(root, p))),
+  );
+  const baselineHtmlRel = new Set(
+    Object.keys(baseline.file_hashes).filter(
+      (f) => f.endsWith('.html') || f.endsWith('.htm'),
+    ),
+  );
+  if (currentHtmlRel.size !== baselineHtmlRel.size) return false;
+  for (const f of currentHtmlRel) {
+    if (!baselineHtmlRel.has(f)) return false;
+    // Hash le contenu pour vérifier.
+    const abs = htmlAbs.find((p) => toPosix(relative(root, p)) === f);
+    if (!abs) return false;
+    let content: string;
+    try {
+      content = await readFile(abs, 'utf8');
+    } catch {
+      return false;
+    }
+    const h = sha1(content);
+    if (h !== baseline.file_hashes[f]) return false;
+    // Ne pas alimenter file_hashes pour les .html ici : on le fait à la
+    // lecture (ou via la branche réutilisation HTML du caller).
+  }
+  // .gs : déterminer ceux dont le hash matche baseline (skip parse).
+  for (const abs of gsAbs) {
+    const rel = toPosix(relative(root, abs));
+    if (!(rel in baseline.file_hashes)) continue; // nouveau fichier → changed
+    let content: string;
+    try {
+      content = await readFile(abs, 'utf8');
+    } catch {
+      continue;
+    }
+    const h = sha1(content);
+    if (h === baseline.file_hashes[rel]) {
+      unchangedGsFiles.add(rel);
+      file_hashes[rel] = h; // évite de re-lire/re-hasher en aval
+    }
+  }
+  // S'il n'y a aucun .gs réutilisable, pas la peine de payer le coût du
+  // chemin incrémental (et de tester la cohérence) — fallback full scan.
+  if (unchangedGsFiles.size === 0) return false;
+  return true;
 }
 
 /**
@@ -835,8 +1070,9 @@ export async function scanWorkspace(opts: {
   /** Baseline (ProjectIndex single-project ou WorkspaceIndex). */
   incrementalBaseline?: ProjectIndex | WorkspaceIndex;
   onIncrementalHit?: (info: {
-    reason: 'no_change_since_baseline';
+    reason: 'no_change_since_baseline' | 'partial_per_file';
     files_count: number;
+    cached_files_count?: number;
   }) => void;
 }): Promise<WorkspaceIndex | ProjectIndex> {
   const projectRoots = await findProjectRoots(opts.root);

@@ -97,7 +97,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~252 tests)
+npm test             # vitest run  (doit rester vert ; ~257 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -133,7 +133,9 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - `ProjectIndex.scan_duration_ms` : timing total du scan.
 - `gaslens scan --bench` : breakdown des phases sur stderr (read / parse+extract / rest). Sample-project : 40 ms total (1 read + 21 parse+extract + 18 rest).
 - **Fast-path incrémental** (`gaslens scan --incremental [baseline]`) : si aucune source n'a une mtime > baseline.scanned_at ET que l'ensemble des fichiers est identique → retour direct du baseline. **×13 sur le sample-project (40 → 3 ms).** Câblé automatiquement dans le hook PostToolUse (réutilise `.gaslens/baseline.json`).
-- `FunctionRecord.outbound_calls` : substrat sérialisable pour le **vrai** incrémental par fichier. `rebuildCalledByFromOutboundCalls(records)` reconstruit `called_by` sans re-parser.
+- **True-incremental partiel** : quand fast-path KO mais que le manifeste et les .html sont inchangés, on saute le parse + extract des .gs dont le hash matche baseline.file_hashes et on réutilise leurs FunctionRecord + caches per-file (`pending_library_calls_by_file`, `unresolved_calls_by_file`). Contributions HTML appliquées seulement aux records frais (les cachés les ont déjà). `rebuildCalledByFromOutboundCalls(records)` reconstruit `called_by` proprement (purge entries stales des records cachés). **×5 sur sample-project quand 1 fichier change** (40 → 8 ms). Fallback full scan si .html ou manifeste changés (correctness > perf).
+- `FunctionRecord.outbound_calls` : substrat sérialisable du chemin partial.
+- Caches per-file dans l'index : `html_contributions`, `pending_library_calls_by_file`, `unresolved_calls_by_file`.
 
 `manifest` (V3 §21.1) — Phases 1 + 2 livrées : `library.undeclared/.unused`, `advanced_service.missing/.unused` (phase 1, confidence high), `scope.missing/.unused` (WARN/INFO, confidence medium, **silencieux quand `oauthScopes` n'est pas explicite** car l'auto-détection Google joue), `urlfetch.not_whitelisted` (WARN, **silencieux quand `urlFetchWhitelist` est absent**, URLs littérales seulement). Câblé dans `check` via `enrichWithManifestFindings`. Table service→scope dans `scopes.ts`. **Restent** : `scope.over_broad` (info, prudent), gestion de `@OnlyCurrentDoc`.
 
@@ -144,10 +146,10 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 `lint-webapp` (V3 §21.4) — Phase 1 livrée (WARN, confidence high/medium) : `webapp.mixed_content` (http:// dans tags script/link/img/iframe/source/video/audio + fetch/XHR/img.src côté JS client), `webapp.link_target` (`<a href>` de navigation sans target=, silencieux si `<base target="_top">` global), `webapp.form_submit` (`<form>` avec input/button submit sans `preventDefault`/`return false`). Câblé dans `check` via `enrichWithLintWebappFindings`. **Restent** : `webapp.run_out_of_context` (vague pour V1).
 
 À construire (détail + intérêt dans V3) :
-- **Scan incrémental complet par fichier** — pour les fichiers individuellement inchangés, sauter le parse + extract et réutiliser leurs `FunctionRecord` cachés. Substrat livré (`outbound_calls`, `rebuildCalledByFromOutboundCalls`, `file_hashes`) ; reste à factoriser les contributions HTML/library en forme sérialisable par fichier, puis brancher le merge. Gain attendu : ×3-5 sur le hook quand un seul fichier change.
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
 - Étendre `GAS_API_DEPRECATED` au fil des observations terrain.
+- Extension future de l'incrémental partial : supporter aussi les changements HTML par tracking des exposures par source (synthétique vs HTML vs library).
 
 ---
 

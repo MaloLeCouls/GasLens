@@ -40,7 +40,7 @@ describe('incremental scan — fast-path', () => {
     }
   });
 
-  it('tombe en full scan quand une source a été modifiée (mtime > scanned_at)', async () => {
+  it('quitte le fast-path quand une source a été modifiée (mtime > scanned_at)', async () => {
     const root = await makeProject({
       'appsscript.json': '{}',
       'main.gs': `function go() { return 1; }`,
@@ -51,22 +51,24 @@ describe('incremental scan — fast-path', () => {
       const future = new Date(Date.parse(baseline.scanned_at) + 60_000);
       await utimes(join(root, 'main.gs'), future, future);
 
-      let hit = false;
+      let fastHit = false;
       const incr = await scanProject({
         root,
         incrementalBaseline: baseline,
-        onIncrementalHit: () => {
-          hit = true;
+        onIncrementalHit: (info) => {
+          if (info.reason === 'no_change_since_baseline') fastHit = true;
         },
       });
-      expect(hit).toBe(false);
+      // Fast-path PAS pris (puisqu'une source a une mtime ≥ scanned_at) ;
+      // le chemin partial_per_file peut, lui, être pris (et c'est correct).
+      expect(fastHit).toBe(false);
       expect(incr.functions.length).toBe(baseline.functions.length);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("tombe en full scan quand un fichier est ajouté", async () => {
+  it("ne reprend pas le fast-path quand un fichier est ajouté", async () => {
     const root = await makeProject({
       'appsscript.json': '{}',
       'main.gs': `function go() { return 1; }`,
@@ -74,15 +76,15 @@ describe('incremental scan — fast-path', () => {
     try {
       const baseline = await scanProject({ root });
       await writeFile(join(root, 'helper.gs'), 'function helper() { return 2; }', 'utf8');
-      let hit = false;
+      let fastHit = false;
       const incr = await scanProject({
         root,
         incrementalBaseline: baseline,
-        onIncrementalHit: () => {
-          hit = true;
+        onIncrementalHit: (info) => {
+          if (info.reason === 'no_change_since_baseline') fastHit = true;
         },
       });
-      expect(hit).toBe(false);
+      expect(fastHit).toBe(false);
       expect(incr.functions.length).toBeGreaterThan(baseline.functions.length);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -101,6 +103,168 @@ describe('incremental scan — fast-path', () => {
       expect(fn.exposures.some((e) => e.type === 'entry_point_web')).toBe(true);
       expect(fn.called_by.length).toBe(1);
       expect(incr.coverage_summary.resolved_pct).toBe(baseline.coverage_summary.resolved_pct);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('incremental scan — true per-file path', () => {
+  it("emprunte le chemin partial quand un seul .gs change", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'a.gs': `function alpha() { return beta(); }`,
+      'b.gs': `function beta() { return 1; } function gamma() { return 2; }`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      // Modifie b.gs : renomme gamma → delta.
+      await writeFile(
+        join(root, 'b.gs'),
+        `function beta() { return 1; } function delta() { return 2; }`,
+        'utf8',
+      );
+      let hitReason: string | null = null;
+      let cached: number | null = null;
+      const incr = await scanProject({
+        root,
+        incrementalBaseline: baseline,
+        onIncrementalHit: (info) => {
+          hitReason = info.reason;
+          cached = info.cached_files_count ?? null;
+        },
+      });
+      expect(hitReason).toBe('partial_per_file');
+      expect(cached).toBe(1); // a.gs inchangé
+      const names = incr.functions.map((f) => f.name).sort();
+      expect(names).toEqual(['alpha', 'beta', 'delta']);
+      // alpha.called_by reste inchangé (cached) ; beta.called_by reflète alpha.
+      const beta = incr.functions.find((f) => f.name === 'beta')!;
+      expect(beta.called_by.some((c) => c.caller === 'alpha')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reconstruit called_by correctement quand un caller (file inchangé) référence une fn renommée", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'a.gs': `function alpha() { return target(); }`,
+      'b.gs': `function target() { return 1; }`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      const baselineTarget = baseline.functions.find((f) => f.name === 'target')!;
+      expect(baselineTarget.called_by.length).toBe(1);
+      // Renomme target → autre. a.gs reste inchangé (référence target qui n'existe plus).
+      await writeFile(
+        join(root, 'b.gs'),
+        `function autre() { return 1; }`,
+        'utf8',
+      );
+      const incr = await scanProject({
+        root,
+        incrementalBaseline: baseline,
+      });
+      const names = incr.functions.map((f) => f.name).sort();
+      expect(names).toEqual(['alpha', 'autre']);
+      // 'target' n'existe plus → l'outbound_call de alpha pointe vers un
+      // nom inexistant. rebuildCalledByFromOutboundCalls ignore les targets
+      // introuvables ; 'autre' n'est PAS appelé.
+      const autre = incr.functions.find((f) => f.name === 'autre')!;
+      expect(autre.called_by.length).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retombe en full scan si un .html a changé (correctness > perf)", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': `function doGet() { return HtmlService.createTemplateFromFile('idx').evaluate(); }
+function go() { return 1; }`,
+      'idx.html': `<html><body><script>google.script.run.go()</script></body></html>`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      // Modifie le HTML.
+      await writeFile(
+        join(root, 'idx.html'),
+        `<html><body><script>google.script.run.doGet()</script></body></html>`,
+        'utf8',
+      );
+      let hitReason: string | null = null;
+      const incr = await scanProject({
+        root,
+        incrementalBaseline: baseline,
+        onIncrementalHit: (info) => {
+          hitReason = info.reason;
+        },
+      });
+      // Le chemin partial n'est PAS éligible — fallback full scan.
+      expect(hitReason).toBeNull();
+      // L'exposure client_call doit refléter le nouveau HTML (doGet, pas go).
+      const doGet = incr.functions.find((f) => f.name === 'doGet')!;
+      expect(doGet.exposures.some((e) => e.type === 'client_call')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retombe en full scan si appsscript.json a changé", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': `function go() { return 1; }`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      await writeFile(
+        join(root, 'appsscript.json'),
+        '{"runtimeVersion":"V8"}',
+        'utf8',
+      );
+      let hitReason: string | null = null;
+      await scanProject({
+        root,
+        incrementalBaseline: baseline,
+        onIncrementalHit: (info) => {
+          hitReason = info.reason;
+        },
+      });
+      expect(hitReason).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("équivalence fonctionnelle : incremental output ≈ full scan output", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'a.gs': `function alpha() { return beta() + 1; }`,
+      'b.gs': `function beta() { return gamma(); }`,
+      'c.gs': `function gamma() { return 42; }`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      // Modifie c.gs sans changer le contrat (ajoute du whitespace ineffectif).
+      await writeFile(
+        join(root, 'c.gs'),
+        `function gamma() { return 43; }`,
+        'utf8',
+      );
+      const fullScan = await scanProject({ root });
+      const incremental = await scanProject({
+        root,
+        incrementalBaseline: baseline,
+      });
+      // Égalité par compte de records et par exposures/called_by.
+      expect(incremental.functions.length).toBe(fullScan.functions.length);
+      for (const incrFn of incremental.functions) {
+        const fullFn = fullScan.functions.find((f) => f.name === incrFn.name)!;
+        expect(incrFn.called_by.length).toBe(fullFn.called_by.length);
+        expect(incrFn.outbound_calls.length).toBe(fullFn.outbound_calls.length);
+        expect(incrFn.exposures.length).toBe(fullFn.exposures.length);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
