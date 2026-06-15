@@ -1,0 +1,16 @@
+{
+  "name": "manifest-scope-missing",
+  "description": "Un agent introduit un appel GmailApp.sendEmail dans un projet où oauthScopes est explicite mais Gmail n'y figure pas. WARN attendu sur scope.missing (V3 §21.1 phase 2).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "appsscript.json",
+      "before_contains": "\"exceptionLogging\": \"STACKDRIVER\",",
+      "after": "\"exceptionLogging\": \"STACKDRIVER\",\n  \"oauthScopes\": [\"https://www.googleapis.com/auth/spreadsheets\"],"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}

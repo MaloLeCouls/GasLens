@@ -21,6 +21,7 @@ export interface ApiCallChain {
 export interface ApiChainCall {
   name: string;
   arity: number;
+  arguments_text: string[];
   line: number;
   col: number;
 }
@@ -72,10 +73,11 @@ function buildChain(outermost: SyntaxNode): ApiCallChain | null {
     }
     const prop: SyntaxNode | null = fn.childForFieldName('property');
     if (!prop || prop.type !== 'property_identifier') return null;
-    const arity = countArgs(cur);
+    const { arity, args } = extractArgs(cur);
     calls.unshift({
       name: prop.text,
       arity,
+      arguments_text: args,
       line: cur.startPosition.row + 1,
       col: cur.startPosition.column,
     });
@@ -130,8 +132,9 @@ function leftmostIdentifier(node: SyntaxNode): string | null {
   return null;
 }
 
-function countArgs(callNode: SyntaxNode): number {
-  const args = callNode.childForFieldName('arguments');
-  if (!args) return 0;
-  return args.namedChildren.length;
+function extractArgs(callNode: SyntaxNode): { arity: number; args: string[] } {
+  const argsNode = callNode.childForFieldName('arguments');
+  if (!argsNode) return { arity: 0, args: [] };
+  const children = argsNode.namedChildren;
+  return { arity: children.length, args: children.map((c) => c.text) };
 }

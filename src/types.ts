@@ -304,6 +304,7 @@ export interface ReceiverUsage {
 export interface ApiChainMethod {
   name: string;
   arity: number;
+  arguments_text: string[];
   line: number;
   col: number;
 }

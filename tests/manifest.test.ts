@@ -237,3 +237,145 @@ describe('manifest — rendu texte', () => {
     }
   });
 });
+
+describe('manifest — phase 2 : oauthScopes', () => {
+  it("silencieux quand oauthScopes est absent (auto-détection Google)", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST_NO_DEPS,
+      'main.gs': `function go() { GmailApp.sendEmail('a','b','c'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      const scopes = report.entries.filter((e) => e.kind === 'scope.missing');
+      expect(scopes).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("WARN scope.missing quand oauthScopes explicite n'inclut pas Gmail", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      }),
+      'main.gs': `function go() { GmailApp.sendEmail('a','b','c'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      const e = report.entries.find((x) => x.kind === 'scope.missing');
+      expect(e?.symbol).toBe('GmailApp');
+      expect(e?.severity).toBe('warn');
+      expect(report.verdict).toBe('WARN');
+      expect(report.findings[0]?.consumer_kind).toBe('manifest.scope');
+      expect(report.findings[0]?.confidence).toBe('medium');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("CLEAN quand un scope acceptable (alternative) suffit", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: ['https://www.googleapis.com/auth/gmail.send'],
+      }),
+      'main.gs': `function go() { GmailApp.sendEmail('a','b','c'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'scope.missing')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("INFO scope.unused quand un scope déclaré ne sert à aucun service utilisé", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: [
+          'https://www.googleapis.com/auth/spreadsheets',
+          'https://mail.google.com/',
+        ],
+      }),
+      'main.gs': `function go() { SpreadsheetApp.getActive().getRange('A1').getValue(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      const unused = report.entries.find((e) => e.kind === 'scope.unused');
+      expect(unused?.symbol).toBe('https://mail.google.com/');
+      expect(unused?.severity).toBe('info');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('manifest — phase 2 : urlFetchWhitelist', () => {
+  it("silencieux quand urlFetchWhitelist est absent", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST_NO_DEPS,
+      'main.gs': `function go() { UrlFetchApp.fetch('https://example.com/x'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'urlfetch.not_whitelisted')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("WARN sur fetch vers URL non listée", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        urlFetchWhitelist: ['https://allowed.example.com/'],
+      }),
+      'main.gs': `function go() { UrlFetchApp.fetch('https://forbidden.example.com/api'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.verdict).toBe('WARN');
+      const e = report.entries.find((x) => x.kind === 'urlfetch.not_whitelisted');
+      expect(e?.symbol).toBe('https://forbidden.example.com/api');
+      expect(report.findings[0]?.consumer_kind).toBe('manifest.urlfetch_whitelist');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("CLEAN sur fetch vers URL listée (match par préfixe)", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        urlFetchWhitelist: ['https://allowed.example.com/'],
+      }),
+      'main.gs': `function go() { UrlFetchApp.fetch('https://allowed.example.com/api/v1'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'urlfetch.not_whitelisted')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignore les URLs dynamiques (variables / interpolation) sans faux positif", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        urlFetchWhitelist: ['https://allowed.example.com/'],
+      }),
+      'main.gs': `function go(u) { UrlFetchApp.fetch(u); UrlFetchApp.fetch(\`https://x.com/\${id}\`); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'urlfetch.not_whitelisted')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

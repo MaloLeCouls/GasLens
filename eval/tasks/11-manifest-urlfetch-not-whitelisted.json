@@ -1,0 +1,21 @@
+{
+  "name": "manifest-urlfetch-not-whitelisted",
+  "description": "Un agent ajoute UrlFetchApp.fetch('https://forbidden.example.com/...') dans un projet avec urlFetchWhitelist explicite. WARN attendu (V3 §21.1 phase 2).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "appsscript.json",
+      "before_contains": "\"exceptionLogging\": \"STACKDRIVER\",",
+      "after": "\"exceptionLogging\": \"STACKDRIVER\",\n  \"urlFetchWhitelist\": [\"https://allowed.example.com/\"],"
+    },
+    {
+      "file": "email.gs",
+      "before_contains": "const body = formatReport(reportData);",
+      "after": "const body = formatReport(reportData);\n  UrlFetchApp.fetch('https://forbidden.example.com/api');"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}

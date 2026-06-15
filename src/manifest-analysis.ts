@@ -1,7 +1,19 @@
 import { GAS_BUILTIN_SERVICES } from './gas-services.js';
+import {
+  SERVICE_SCOPE_REQUIREMENTS,
+  SERVICES_WITHOUT_SCOPE,
+  isScopeSatisfied,
+  scopesAcceptedFor,
+  servicesThatCouldJustify,
+} from './scopes.js';
 import type { Finding, Verdict } from './findings.js';
 import { aggregateVerdict } from './findings.js';
-import type { ProjectIndex, ProjectManifest, ReceiverUsage } from './types.js';
+import type {
+  ApiCallChainRecord,
+  ProjectIndex,
+  ProjectManifest,
+  ReceiverUsage,
+} from './types.js';
 
 /**
  * Symboles utilisateurs par défaut des **services avancés Google Apps Script**.
@@ -58,7 +70,10 @@ export interface ManifestReportEntry {
     | 'library.undeclared'
     | 'library.unused'
     | 'advanced_service.missing'
-    | 'advanced_service.unused';
+    | 'advanced_service.unused'
+    | 'scope.missing'
+    | 'scope.unused'
+    | 'urlfetch.not_whitelisted';
   severity: 'break' | 'warn' | 'info';
   symbol: string;
   reason: string;
@@ -138,6 +153,18 @@ export function analyzeManifest(index: ProjectIndex): ManifestReport {
     }
   }
 
+  // Phase 2 : croisements OAuth scopes + urlFetchWhitelist.
+  const scopeEntries = analyzeScopes(index.manifest, callsByReceiver);
+  for (const e of scopeEntries) {
+    entries.push(e);
+    findings.push(...toFindings(e, index.project));
+  }
+  const fetchEntries = analyzeUrlFetchWhitelist(index.manifest, index.api_call_chains);
+  for (const e of fetchEntries) {
+    entries.push(e);
+    findings.push(...toFindings(e, index.project));
+  }
+
   const breaks = findings.filter((f) => f.severity === 'break');
   const warns = findings.filter((f) => f.severity === 'warn');
   const verdict = aggregateVerdict(breaks, warns);
@@ -210,10 +237,11 @@ function callSitesOf(calls: ReceiverUsage[]) {
 }
 
 function toFindings(entry: ManifestReportEntry, project: string): Finding[] {
-  const consumer_kind =
-    entry.kind === 'advanced_service.missing'
-      ? 'manifest.advanced_service'
-      : 'manifest.library';
+  const consumer_kind = consumerKindFor(entry.kind);
+  const confidence = entry.kind.startsWith('scope.') || entry.kind === 'urlfetch.not_whitelisted'
+    ? 'medium'
+    : 'high';
+  if (entry.severity === 'info') return [];
   return entry.call_sites.map((c) => ({
     severity: entry.severity,
     symbol: `${project}::manifest::${entry.symbol}`,
@@ -221,8 +249,145 @@ function toFindings(entry: ManifestReportEntry, project: string): Finding[] {
     consumer_kind,
     reason: `${entry.reason} (appel '${entry.symbol}.${c.method}' depuis '${c.function}')`,
     fix_hint: entry.fix_hint,
-    confidence: 'high',
+    confidence,
   }));
+}
+
+function consumerKindFor(
+  kind: ManifestReportEntry['kind'],
+):
+  | 'manifest.library'
+  | 'manifest.advanced_service'
+  | 'manifest.scope'
+  | 'manifest.urlfetch_whitelist' {
+  switch (kind) {
+    case 'advanced_service.missing':
+    case 'advanced_service.unused':
+      return 'manifest.advanced_service';
+    case 'scope.missing':
+    case 'scope.unused':
+      return 'manifest.scope';
+    case 'urlfetch.not_whitelisted':
+      return 'manifest.urlfetch_whitelist';
+    default:
+      return 'manifest.library';
+  }
+}
+
+function analyzeScopes(
+  manifest: ProjectManifest,
+  callsByReceiver: Map<string, ReceiverUsage[]>,
+): ManifestReportEntry[] {
+  // L'auto-détection Google joue tant que `oauthScopes` n'est PAS explicite.
+  // On reste donc silencieux dans ce cas — c'est la doctrine d'honnêteté.
+  if (manifest.oauth_scopes.length === 0) return [];
+  const declared = new Set(manifest.oauth_scopes);
+  const out: ManifestReportEntry[] = [];
+
+  // scope.missing : pour chaque service utilisé exigeant un scope, vérifier
+  // qu'au moins l'une des variantes acceptables est déclarée.
+  const servicesNeedingScope = new Map<string, ReceiverUsage[]>();
+  for (const [receiver, calls] of callsByReceiver) {
+    if (!(receiver in SERVICE_SCOPE_REQUIREMENTS)) continue;
+    servicesNeedingScope.set(receiver, calls);
+  }
+  for (const [svc, calls] of servicesNeedingScope) {
+    if (isScopeSatisfied(svc, declared)) continue;
+    const accepted = scopesAcceptedFor(svc);
+    out.push({
+      kind: 'scope.missing',
+      severity: 'warn',
+      symbol: svc,
+      reason:
+        `le code utilise '${svc}' (${calls.length} site${calls.length > 1 ? 's' : ''}) ` +
+        `mais 'oauthScopes' est déclaré explicitement et aucun scope acceptable n'y figure ` +
+        `(attendu l'un de : ${accepted.join(', ')})`,
+      fix_hint:
+        `ajouter '${accepted[0]}' aux oauthScopes du manifeste, ou retirer la liste oauthScopes ` +
+        `pour réactiver l'auto-détection Google`,
+      call_sites: callSitesOf(calls),
+    });
+  }
+
+  // scope.unused : pour chaque scope déclaré, vérifier qu'au moins un service
+  // l'aurait justifié. Si aucun ne le justifie, INFO.
+  for (const scope of manifest.oauth_scopes) {
+    const couldJustify = servicesThatCouldJustify(scope);
+    if (couldJustify.length === 0) continue; // scope hors mapping — on s'abstient.
+    const anyUsed = couldJustify.some((s) => callsByReceiver.has(s));
+    if (anyUsed) continue;
+    out.push({
+      kind: 'scope.unused',
+      severity: 'info',
+      symbol: scope,
+      reason: `scope '${scope}' déclaré dans oauthScopes mais aucun service exigeant ce scope n'est utilisé (${couldJustify.join(', ')})`,
+      fix_hint: `retirer ce scope d'oauthScopes — un scope inutile peut compliquer le consentement utilisateur`,
+      call_sites: [],
+    });
+  }
+
+  return out;
+}
+
+function analyzeUrlFetchWhitelist(
+  manifest: ProjectManifest,
+  chains: ApiCallChainRecord[],
+): ManifestReportEntry[] {
+  if (manifest.url_fetch_whitelist.length === 0) return [];
+  const whitelist = manifest.url_fetch_whitelist;
+  const out: ManifestReportEntry[] = [];
+  const offendingByUrl = new Map<
+    string,
+    Array<{ file: string; line: number; function: string; method: string }>
+  >();
+
+  for (const chain of chains) {
+    if (chain.root !== 'UrlFetchApp') continue;
+    for (const m of chain.methods) {
+      if (m.name !== 'fetch' && m.name !== 'fetchAll') continue;
+      const literal = extractLiteralUrl(m.arguments_text[0]);
+      if (!literal) continue;
+      if (matchesWhitelist(literal, whitelist)) continue;
+      const slot = offendingByUrl.get(literal) ?? [];
+      slot.push({
+        file: chain.file,
+        line: m.line,
+        function: chain.function,
+        method: m.name,
+      });
+      offendingByUrl.set(literal, slot);
+    }
+  }
+
+  for (const [url, sites] of offendingByUrl) {
+    out.push({
+      kind: 'urlfetch.not_whitelisted',
+      severity: 'warn',
+      symbol: url,
+      reason:
+        `UrlFetchApp.fetch('${url}') vers une URL hors urlFetchWhitelist ` +
+        `(${sites.length} site${sites.length > 1 ? 's' : ''}). À l'exécution : le fetch sera bloqué.`,
+      fix_hint:
+        `ajouter '${url}' (ou un préfixe couvrant) à urlFetchWhitelist dans appsscript.json, ` +
+        `ou retirer urlFetchWhitelist du manifeste pour autoriser toutes les URLs`,
+      call_sites: sites,
+    });
+  }
+  return out;
+}
+
+function extractLiteralUrl(argText: string | undefined): string | null {
+  if (!argText) return null;
+  // string_literal : "'...'" ou '"..."'  ou template_string sans interpolation.
+  const m = /^(?:['"`])(.*)(?:['"`])$/.exec(argText);
+  if (!m) return null;
+  const body = m[1] ?? '';
+  if (body.includes('${') || body.includes('\\')) return null;
+  return body;
+}
+
+function matchesWhitelist(url: string, whitelist: string[]): boolean {
+  return whitelist.some((entry) => url.startsWith(entry));
 }
 
 function buildSummary(

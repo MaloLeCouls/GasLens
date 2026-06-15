@@ -20,6 +20,8 @@ export type ConsumerKind =
   | 'template_scriptlet_reader'
   | 'manifest.library'
   | 'manifest.advanced_service'
+  | 'manifest.scope'
+  | 'manifest.urlfetch_whitelist'
   | 'api.unknown_method';
 
 export type Confidence = 'high' | 'medium' | 'low';
