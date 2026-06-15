@@ -266,6 +266,41 @@ export interface ProjectCoverageSummary {
   functions_with_non_serializable_returns: string[];
 }
 
+export interface LibraryEntry {
+  user_symbol: string;
+  library_id: string;
+  version: string;
+  development_mode: boolean | null;
+}
+
+export interface AdvancedServiceEntry {
+  user_symbol: string;
+  service_id: string;
+  version: string;
+}
+
+export interface ProjectManifest {
+  runtime_version: string | null;
+  oauth_scopes: string[];
+  url_fetch_whitelist: string[];
+  webapp: { execute_as: string | null; access: string | null } | null;
+  libraries: LibraryEntry[];
+  enabled_advanced_services: AdvancedServiceEntry[];
+  /** False si aucun appsscript.json détecté (V3 §21.1 — distinct de « manifest vide »). */
+  present: boolean;
+}
+
+export interface ReceiverUsage {
+  /** Receiver d'un member_expression call (`GmailApp`, `Drive`, `OAuth2`, ...). */
+  receiver: string;
+  /** Méthode finale du call (`sendEmail`, `Files`, ...). */
+  method: string;
+  /** Fonction d'origine du call (caller). */
+  function: string;
+  file: string;
+  line: number;
+}
+
 export interface ProjectIndex {
   /** Discriminant pour les outils consommateurs (`workspace` ailleurs). */
   kind?: 'project';
@@ -278,6 +313,10 @@ export interface ProjectIndex {
   property_keys: PropertyKeyEntry[];
   /** Appels `Lib.fn()` avec un préfixe déclaré en manifeste mais non encore résolus. */
   pending_library_calls: PendingLibraryCall[];
+  /** Usage agrégé des receivers (services natifs, libs déclarées, et inconnus). */
+  receiver_usage: ReceiverUsage[];
+  /** Manifeste parsé — source pour `gaslens manifest` (V3 §21.1). */
+  manifest: ProjectManifest;
   /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */
   coverage_summary: ProjectCoverageSummary;
   unresolved_calls: UnresolvedCall[];

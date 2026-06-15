@@ -53,10 +53,11 @@ src/
     uncertainty.ts             alimente coverage (dispatch dynamique, etc.)
   inspect.ts / impact.ts / diff.ts / check.ts / hook.ts    les commandes
   map.ts                       table des matières compacte (V3 §21.5) — projection seule de l'index
+  manifest.ts                  parse complet d'appsscript.json (scopes, libs, advanced services, whitelist)
+  manifest-analysis.ts         croise code ↔ manifeste (V3 §21.1) : library.undeclared/.unused, advanced_service.missing/.unused
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
-  eval.ts                      rejoue eval/tasks/*.json
+  eval.ts                      rejoue eval/tasks/*.json (inclut désormais les findings manifeste via enrichWithManifestFindings)
   init.ts                      recettes CLAUDE.md / settings.json (V2 §16)
-  manifest.ts                  ⚠ STUB : extrait SEULEMENT les préfixes de librairie aujourd'hui
   gas-services.ts              ⚠ liste de NOMS de services natifs (pas de validation par méthode)
 eval/tasks/*.json              jeu de tâches de référence (édition → verdict attendu)
 tests/                         vitest ; fixtures/sample-project + fixtures/sample-workspace
@@ -86,7 +87,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~179 tests)
+npm test             # vitest run  (doit rester vert ; ~190 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -108,10 +109,11 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
+
+`manifest` (V3 §21.1) — Phase 1 livrée : `library.undeclared` (BREAK), `library.unused` (INFO), `advanced_service.missing` (BREAK), `advanced_service.unused` (INFO). Câblé dans `check` via `enrichWithManifestFindings`. **À étendre** : `scope.missing/.unused` (mapping service→scope), `urlfetch.not_whitelisted` (URL littérales vs `urlFetchWhitelist`).
 
 À construire (détail + intérêt dans V3) :
-- **`manifest`** (V3 §21.1) — étendre le STUB `manifest.ts` : scopes/services avancés/libs/`urlFetchWhitelist` *utilisés vs déclarés*. Nouveau `consumer_kind`. Meilleur ROI restant.
 - **`validate-api`** (V3 §21.2) — passer `gas-services.ts` du niveau *nom* au niveau *méthode* (via `@types/google-apps-script`) : attrape les méthodes GAS hallucinées en statique.
 - **`lint-webapp`** / **`lint-runtime`** (V3 §21.4/§21.3) — `warn`/`info` (mixed content, target, forms ; quota/6 min/lock/trigger orphelin).
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).

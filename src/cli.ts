@@ -24,6 +24,7 @@ import { emitDts } from './emit-dts.js';
 import { emitContractTests } from './emit-contract-tests.js';
 import { loadEvalDataset, runEval, renderEvalReportText } from './eval.js';
 import { buildMap, renderMapText } from './map.js';
+import { analyzeManifest, renderManifestText } from './manifest-analysis.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -175,6 +176,72 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       } else {
         process.stdout.write(JSON.stringify(report, null, 2) + '\n');
       }
+    });
+
+  program
+    .command('manifest')
+    .description(
+      "Croise appsscript.json avec le code indexé (V3 §21.1) : librairies " +
+        "déclarées vs utilisées, services avancés manquants/superflus. Émet " +
+        "des findings exploitables par 'check' (consumer_kind manifest.*).",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Cibler un seul projet d'un index workspace")
+    .option(
+      '--severity-threshold <level>',
+      'info | warn | break — seuil des entrées remontées',
+      'info',
+    )
+    .option('--format <fmt>', 'json | text', 'json')
+    .action(async (opts: ManifestCliOpts) => {
+      const idxPath = resolve(opts.indexPath);
+      if (!existsSync(idxPath)) {
+        process.stderr.write(
+          `gaslens manifest: index introuvable à ${idxPath}. Lance d'abord 'gaslens scan'.\n`,
+        );
+        process.exit(2);
+      }
+      let raw: ProjectIndex | WorkspaceIndex;
+      try {
+        raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+          | ProjectIndex
+          | WorkspaceIndex;
+      } catch (err) {
+        process.stderr.write(
+          `gaslens manifest: index illisible — ${(err as Error).message}.\n`,
+        );
+        process.exit(2);
+      }
+      const targets: ProjectIndex[] = pickManifestTargets(raw, opts.project);
+      if (targets.length === 0) {
+        process.stderr.write(
+          `gaslens manifest: --project '${opts.project ?? ''}' introuvable.\n`,
+        );
+        process.exit(2);
+      }
+      const threshold = parseManifestThreshold(opts.severityThreshold);
+      const reports = targets.map((p) => {
+        const r = analyzeManifest(p);
+        return {
+          ...r,
+          entries: r.entries.filter((e) => severityRank(e.severity) >= threshold),
+        };
+      });
+      const verdict = reports.some((r) => r.verdict === 'BREAK')
+        ? 'BREAK'
+        : reports.some((r) => r.verdict === 'WARN')
+          ? 'WARN'
+          : 'CLEAN';
+      if (opts.format === 'text') {
+        for (const r of reports) {
+          process.stdout.write(renderManifestText(r) + '\n');
+        }
+      } else {
+        process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
+      }
+      if (verdict === 'BREAK') process.exit(3);
+      if (verdict === 'WARN') process.exit(4);
+      process.exit(0);
     });
 
   program
@@ -828,6 +895,41 @@ interface MapCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+}
+
+interface ManifestCliOpts {
+  indexPath: string;
+  project?: string;
+  severityThreshold: string;
+  format: string;
+}
+
+function pickManifestTargets(
+  raw: ProjectIndex | WorkspaceIndex,
+  projectFilter: string | undefined,
+): ProjectIndex[] {
+  if (raw.kind !== 'workspace') {
+    if (projectFilter && raw.project !== projectFilter) return [];
+    return [raw];
+  }
+  if (projectFilter) {
+    const found = raw.projects.find((p) => p.project === projectFilter);
+    return found ? [found] : [];
+  }
+  return raw.projects;
+}
+
+function parseManifestThreshold(v: string): number {
+  if (v === 'info') return 0;
+  if (v === 'warn') return 1;
+  if (v === 'break') return 2;
+  throw new Error(`--severity-threshold doit être info|warn|break (reçu '${v}')`);
+}
+
+function severityRank(s: 'info' | 'warn' | 'break'): number {
+  if (s === 'info') return 0;
+  if (s === 'warn') return 1;
+  return 2;
 }
 
 type PickResult =

@@ -1,0 +1,23 @@
+{
+  "name": "manifest-library-undeclared",
+  "description": "Un agent introduit un appel à une librairie non déclarée dans appsscript.json (typo / oubli). check doit lever un BREAK 'manifest.library' (V3 §21.1).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "const body = formatReport(reportData);",
+      "after": "const body = formatReport(reportData);\n  OAuth2.requireAuth(reportData);"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "breaks_min": 1,
+    "breaks_must_include": [
+      {
+        "file": "email.gs",
+        "reason_substring": "OAuth2",
+        "consumer_kind": "manifest.library"
+      }
+    ]
+  }
+}

@@ -9,6 +9,7 @@ import type {
   FunctionRecord,
   PendingLibraryCall,
   ProjectIndex,
+  ReceiverUsage,
   ScriptletKindLabel,
   UnresolvedCall,
   WorkspaceIndex,
@@ -153,6 +154,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   //   - unresolved.
   const unresolved: UnresolvedCall[] = [];
   const pending_library_calls: PendingLibraryCall[] = [];
+  const receiver_usage: ReceiverUsage[] = [];
   for (const b of bundles) {
     // a) Expositions installable_trigger : sur *tout* le fichier, peu importe le caller.
     const trigMap = installableTriggersFromCalls(b.topLevelCalls, b.fileRel);
@@ -195,6 +197,18 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       const seenOut = new Set<string>();
       for (const call of calls) {
         const resolution = resolveCall(call, records, libraryPrefixes);
+        if (call.receiver !== null) {
+          const root = rootReceiver(call.receiver);
+          if (root !== null && isCapitalizedReceiver(root)) {
+            receiver_usage.push({
+              receiver: root,
+              method: call.final_name,
+              function: def.name,
+              file: b.fileRel,
+              line: call.line,
+            });
+          }
+        }
         switch (resolution.kind) {
           case 'internal': {
             const target = records.get(resolution.name)!;
@@ -356,6 +370,8 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     ),
     property_keys,
     pending_library_calls,
+    receiver_usage,
+    manifest: manifest.manifest,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],
   };
@@ -811,6 +827,26 @@ function resolveCall(
 
 function isJsBuiltin(name: string): boolean {
   return JS_GLOBALS.has(name);
+}
+
+/**
+ * Filtre les receivers qui ressemblent à un nom *top-level* de service ou
+ * librairie : identifiant simple, commençant par une majuscule.
+ */
+function isCapitalizedReceiver(name: string): boolean {
+  return /^[A-Z][a-zA-Z0-9_$]*$/.test(name);
+}
+
+/**
+ * Extrait l'identifiant racine d'un texte de receiver tel que rendu par
+ * `RawCallSite.receiver` (qui peut être une expression chaînée arbitraire
+ * pour `A.b.c()` ou `f().x.y()`). Renvoie null si la racine n'est pas un
+ * identifiant nu (ex: `(x + y).fn()`, `arr[0].fn()`).
+ */
+function rootReceiver(text: string): string | null {
+  // On coupe au premier séparateur structurel : `.`, `(`, `[`, espace, etc.
+  const m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(text);
+  return m ? m[0] : null;
 }
 const JS_GLOBALS = new Set<string>([
   'parseInt',

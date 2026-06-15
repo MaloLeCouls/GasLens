@@ -17,7 +17,9 @@ export type ConsumerKind =
   | 'property_key_reader'
   | 'property_key_writer'
   | 'array2d_consumer'
-  | 'template_scriptlet_reader';
+  | 'template_scriptlet_reader'
+  | 'manifest.library'
+  | 'manifest.advanced_service';
 
 export type Confidence = 'high' | 'medium' | 'low';
 

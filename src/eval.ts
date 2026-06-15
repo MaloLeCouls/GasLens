@@ -4,6 +4,7 @@ import { dirname, join, resolve, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { scanProject, scanWorkspace } from './scanner.js';
 import { diffIndexes } from './diff.js';
+import { enrichWithManifestFindings } from './check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 import type {
   DerivedDeltaKind,
@@ -233,11 +234,14 @@ function diffSingleProject(
   baseline: ProjectIndex,
   current: ProjectIndex,
 ): DiffReport {
-  return diffIndexes(baseline, current, {
+  const base = diffIndexes(baseline, current, {
     baselineLabel: 'baseline',
     currentLabel: 'mutated',
     severity_threshold: 'warn',
   });
+  // L'eval reflète ce que le hook (`check`) verra : on enrichit avec les
+  // findings manifeste de l'état courant.
+  return enrichWithManifestFindings(base, current, 'warn');
 }
 
 async function copyTree(src: string, dst: string): Promise<void> {
