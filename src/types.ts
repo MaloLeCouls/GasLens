@@ -400,6 +400,14 @@ export interface ProjectIndex {
   project: string;
   root: string;
   scanned_at: string;
+  /** Durée du scan en ms (observabilité — `scan --bench` détaille). */
+  scan_duration_ms?: number;
+  /**
+   * sha1 du contenu de chaque source (.gs/.html/appsscript.json), keyé par
+   * chemin relatif à `root`. Fondations pour l'incremental scan (V3 §21).
+   * Utilisable par d'autres outils pour détecter changements sans I/O.
+   */
+  file_hashes?: Record<string, string>;
   files: string[];
   functions: FunctionRecord[];
   /** Index des clés PropertiesService/CacheService au niveau projet. */

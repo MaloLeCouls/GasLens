@@ -24,6 +24,7 @@ export type ConsumerKind =
   | 'manifest.urlfetch_whitelist'
   | 'api.unknown_method'
   | 'api.wrong_arity'
+  | 'api.deprecated'
   | 'lint.quota_in_loop'
   | 'lint.urlfetch_in_loop'
   | 'lint.lock_no_finally'

@@ -65,10 +65,22 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       'Format de sortie : json | ndjson (ndjson = un record fonction par ligne)',
       'json',
     )
+    .option('--bench', "Imprime le breakdown des timings sur stderr", false)
     .action(async (path: string, opts: ScanOpts) => {
       try {
         const root = resolve(path);
-        const idx = await scanWorkspace({ root });
+        const idx = await scanWorkspace({
+          root,
+          onBench: opts.bench
+            ? (b) => {
+                process.stderr.write(
+                  `gaslens scan bench: total=${b.total_ms}ms ` +
+                    `(read=${b.read_files_ms}ms parse+extract=${b.parse_and_extract_ms}ms ` +
+                    `rest=${b.rest_ms}ms ; ${b.files_count} files, ${b.functions_count} fns)\n`,
+                );
+              }
+            : undefined,
+        });
 
         if (opts.stdout) {
           if (opts.format === 'ndjson' && idx.kind === 'project') {
@@ -1148,6 +1160,7 @@ interface ScanOpts {
   output?: string;
   stdout?: boolean;
   format: 'json' | 'ndjson';
+  bench: boolean;
 }
 
 interface InspectCliOpts {

@@ -983,3 +983,38 @@ export function getMethodArity(
   if (!t) return null;
   return t[method] ?? null;
 }
+
+/**
+ * Méthodes dépréciées du runtime GAS — réelles, vérifiées contre la doc.
+ * Émis en WARN (confidence: high) : la méthode existe toujours et marche,
+ * mais Google la décourage. Conservatif : seulement les cas non ambigus.
+ *
+ * Note : pas confondre avec `runtimeVersion: 'V8'` vs Rhino. Beaucoup
+ * d'API « Rhino-only » n'existent plus du tout — elles tombent donc en
+ * `api.unknown_method`. Cette table cible les méthodes qui *existent*
+ * encore mais sont *découragées*.
+ */
+export const GAS_API_DEPRECATED: Record<
+  string,
+  Record<string, { reason: string; replacement?: string }>
+> = {
+  Utilities: {
+    jsonParse: {
+      reason: "Utilities.jsonParse est déprécié — JSON natif est disponible sous V8.",
+      replacement: 'JSON.parse(str)',
+    },
+    jsonStringify: {
+      reason: "Utilities.jsonStringify est déprécié — JSON natif est disponible sous V8.",
+      replacement: 'JSON.stringify(obj)',
+    },
+  },
+};
+
+export function getMethodDeprecation(
+  type: string,
+  method: string,
+): { reason: string; replacement?: string } | null {
+  const t = GAS_API_DEPRECATED[type];
+  if (!t) return null;
+  return t[method] ?? null;
+}

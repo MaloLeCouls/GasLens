@@ -1,11 +1,16 @@
-import { GAS_API, GAS_API_SERVICE_ROOTS, getMethodArity } from './gas-api.js';
+import {
+  GAS_API,
+  GAS_API_SERVICE_ROOTS,
+  getMethodArity,
+  getMethodDeprecation,
+} from './gas-api.js';
 import type { Finding, Verdict } from './findings.js';
 import { aggregateVerdict } from './findings.js';
 import type { ApiCallChainRecord, ProjectIndex } from './types.js';
 
 export interface ApiValidationEntry {
-  kind: 'api.unknown_method' | 'api.wrong_arity';
-  severity: 'break';
+  kind: 'api.unknown_method' | 'api.wrong_arity' | 'api.deprecated';
+  severity: 'break' | 'warn';
   /** Type registre où la méthode est introuvable (ex: 'Sheet', 'Range'). */
   on_type: string;
   /** Méthode hallucinée ou mal appelée. */
@@ -17,6 +22,9 @@ export interface ApiValidationEntry {
   /** Renseigné pour api.wrong_arity uniquement : ce que l'appel a passé vs ce qui est attendu. */
   arity_observed?: number;
   arity_expected?: { min: number; max: number };
+  /** Renseigné pour api.deprecated : raison et remplacement suggéré. */
+  deprecation_reason?: string;
+  deprecation_replacement?: string;
   call_site: { file: string; line: number; function: string };
 }
 
@@ -114,6 +122,29 @@ export function validateApi(index: ProjectIndex): ApiValidationReport {
         findings.push(toFinding(entry, index.project));
         break;
       }
+      // Deprecation check (V3 §21.2, phase 3) — la méthode existe et est
+      // appelée correctement, mais Google la décourage.
+      const dep = getMethodDeprecation(currentType, m.name);
+      if (dep) {
+        const entry: ApiValidationEntry = {
+          kind: 'api.deprecated',
+          severity: 'warn',
+          on_type: currentType,
+          method: m.name,
+          resolved_prefix: resolvedPrefix,
+          suggestions: dep.replacement ? [dep.replacement] : [],
+          deprecation_reason: dep.reason,
+          deprecation_replacement: dep.replacement,
+          call_site: {
+            file: chain.file,
+            line: m.line,
+            function: chain.function,
+          },
+        };
+        entries.push(entry);
+        findings.push(toFinding(entry, index.project));
+        // On continue la chaîne — la méthode existe, son retour est connu.
+      }
       resolvedPrefix = `${resolvedPrefix}.${m.name}()`;
       currentType = sig.returns;
     }
@@ -137,6 +168,24 @@ export function validateApi(index: ProjectIndex): ApiValidationReport {
 }
 
 function toFinding(entry: ApiValidationEntry, project: string): Finding {
+  if (entry.kind === 'api.deprecated') {
+    const replacement = entry.deprecation_replacement
+      ? ` — préférer \`${entry.deprecation_replacement}\``
+      : '';
+    return {
+      severity: 'warn',
+      symbol: `${project}::api::${entry.on_type}.${entry.method}`,
+      consumer: { file: entry.call_site.file, line: entry.call_site.line },
+      consumer_kind: 'api.deprecated',
+      reason:
+        `'${entry.on_type}.${entry.method}' est dépréciée (depuis '${entry.call_site.function}')` +
+        `${replacement}. ${entry.deprecation_reason ?? ''}`,
+      fix_hint: entry.deprecation_replacement
+        ? `remplacer par ${entry.deprecation_replacement}`
+        : `consulter la doc Apps Script pour l'alternative à '${entry.on_type}.${entry.method}'`,
+      confidence: 'high',
+    };
+  }
   if (entry.kind === 'api.wrong_arity') {
     const obs = entry.arity_observed ?? 0;
     const exp = entry.arity_expected ?? { min: 0, max: 0 };
@@ -235,6 +284,14 @@ export function renderApiValidationText(report: ApiValidationReport): string {
   );
   for (const e of report.entries) {
     const sites = `${e.call_site.file}:${e.call_site.line}`;
+    if (e.kind === 'api.deprecated') {
+      const repl = e.deprecation_replacement ? `  → ${e.deprecation_replacement}` : '';
+      lines.push(
+        `  WARN   api.deprecated      ${e.on_type}.${e.method}  @ ${sites}${repl}`,
+      );
+      lines.push(`        prefix: ${e.resolved_prefix}.${e.method}`);
+      continue;
+    }
     if (e.kind === 'api.wrong_arity') {
       const exp = e.arity_expected ?? { min: 0, max: 0 };
       const expectedText = exp.min === exp.max ? `${exp.min}` : `${exp.min}-${exp.max}`;

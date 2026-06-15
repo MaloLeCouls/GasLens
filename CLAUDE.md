@@ -63,6 +63,7 @@ src/
   gas-api.ts                   registre curé Service→Method→ReturnType pour ~15 services natifs (source: doc + @types/google-apps-script) ; couche d'arity séparée (GAS_API_ARITY) pour api.wrong_arity
   lint-runtime.ts              lint heuristique GAS-aware (V3 §21.3) : quota.value_in_loop, urlfetch.in_loop, lock.no_finally, trigger.orphan
   lint-webapp.ts               lint des .html servis (V3 §21.4) : webapp.mixed_content, webapp.link_target, webapp.form_submit
+  mcp-server.ts                serveur MCP stdio (V3 §24) — 4 outils consolidés (map/inspect/impact/check) ; bin/gaslens-mcp.js launcher
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
   eval.ts                      rejoue eval/tasks/*.json (inclut findings manifeste + validate-api via enrichWith*Findings)
   init.ts                      recettes CLAUDE.md / settings.json / SKILL.md (V2 §16, V3 §24) — `init --write` écrit aux bons chemins
@@ -96,7 +97,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~243 tests)
+npm test             # vitest run  (doit rester vert ; ~247 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -125,18 +126,25 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - `init --section skill --write` — installe `.claude/skills/gaslens/SKILL.md` (chargement paresseux, zéro coût tant qu'inutilisé).
 - `--compact` sur toutes les commandes read-only — JSON sans indentation, ~30 % tokens en moins.
 - Détection d'index stale (`stale-check.ts`) — warning stderr automatique quand une source est plus récente que l'index, avec la commande exacte de re-scan.
+- **Serveur MCP** (`bin/gaslens-mcp.js`) — expose 4 outils consolidés (`gaslens_map`, `gaslens_inspect`, `gaslens_impact`, `gaslens_check`) sur stdio. Pour Claude Code, ajouter dans `.mcp.json` : `{"mcpServers":{"gaslens":{"command":"node","args":["./bin/gaslens-mcp.js"]}}}` (ou `npx gaslens-mcp` après publication).
+
+**Fondations perf (V3 §21, prep incremental scan)** :
+- `ProjectIndex.file_hashes` : sha1 de chaque source (.gs/.html/appsscript.json) stockée dans l'index. Permet à un consommateur (ou à l'incremental scan futur) de détecter sans I/O quels fichiers ont changé.
+- `ProjectIndex.scan_duration_ms` : timing total du scan.
+- `gaslens scan --bench` : breakdown des phases sur stderr (read / parse+extract / rest). Mesuré sur sample-project : 39 ms total (4 read + 18 parse+extract + 17 rest).
 
 `manifest` (V3 §21.1) — Phases 1 + 2 livrées : `library.undeclared/.unused`, `advanced_service.missing/.unused` (phase 1, confidence high), `scope.missing/.unused` (WARN/INFO, confidence medium, **silencieux quand `oauthScopes` n'est pas explicite** car l'auto-détection Google joue), `urlfetch.not_whitelisted` (WARN, **silencieux quand `urlFetchWhitelist` est absent**, URLs littérales seulement). Câblé dans `check` via `enrichWithManifestFindings`. Table service→scope dans `scopes.ts`. **Restent** : `scope.over_broad` (info, prudent), gestion de `@OnlyCurrentDoc`.
 
-`validate-api` (V3 §21.2) — Phases 1 + 2 livrées : `api.unknown_method` (BREAK) + suggestions fuzzy, `api.wrong_arity` (BREAK, seulement « trop peu d'args » — on ne flag pas le trop, JS ignore en silence). Registre curé `gas-api.ts` (~15 services, ~400 méthodes ; couche arity séparée `GAS_API_ARITY` avec ~120 entrées). Honnête : s'arrête sur les types `unknown`/tableaux, et s'abstient sur les méthodes overloadées (Sheet.getRange…) plutôt que d'inventer. Câblé dans `check` via `enrichWithApiFindings`. **Reste** : `api.deprecated` (méthodes Rhino-only sous V8).
+`validate-api` (V3 §21.2) — Phases 1 + 2 + 3 livrées : `api.unknown_method` (BREAK) + suggestions fuzzy, `api.wrong_arity` (BREAK, seulement « trop peu d'args »), `api.deprecated` (WARN, ex: `Utilities.jsonParse` → `JSON.parse`). Registre curé `gas-api.ts` (~15 services, ~400 méthodes ; couches `GAS_API_ARITY` et `GAS_API_DEPRECATED` séparées et facilement extensibles). Honnête : s'arrête sur les types `unknown`/tableaux, et s'abstient sur les méthodes overloadées. Câblé dans `check` via `enrichWithApiFindings`.
 
 `lint-runtime` (V3 §21.3) — Phase 1 livrée (WARN/INFO, jamais BREAK) : `quota.value_in_loop` (getValue/setValue/appendRow/… dans for/while/forEach/map), `urlfetch.in_loop` (suggère fetchAll), `lock.no_finally` (waitLock/tryLock sans releaseLock dans finally du même scope), `trigger.orphan` (INFO niveau projet — newTrigger().create() sans deleteTrigger). Câblé dans `check` via `enrichWithLintRuntimeFindings`. **Restent** : `longrun.no_state` (heuristique 6 min, peu net pour V1).
 
 `lint-webapp` (V3 §21.4) — Phase 1 livrée (WARN, confidence high/medium) : `webapp.mixed_content` (http:// dans tags script/link/img/iframe/source/video/audio + fetch/XHR/img.src côté JS client), `webapp.link_target` (`<a href>` de navigation sans target=, silencieux si `<base target="_top">` global), `webapp.form_submit` (`<form>` avec input/button submit sans `preventDefault`/`return false`). Câblé dans `check` via `enrichWithLintWebappFindings`. **Restent** : `webapp.run_out_of_context` (vague pour V1).
 
 À construire (détail + intérêt dans V3) :
+- **Scan incrémental complet** — réutiliser `ProjectIndex.file_hashes` : pour les fichiers dont le hash matche le baseline, sauter le parse + extract. Vrai gain perf sur gros repos (×5-10 sur le hook). Demande un refactor du scanner pour séparer per-file extraction vs cross-file resolution. Fondations livrées, refactor à faire.
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
-- `emit-contract-tests --runner gas-fakes` (V3 §23) ; wrapper **MCP** + **Skill** (V3 §24).
+- `emit-contract-tests --runner gas-fakes` (V3 §23).
 
 ---
 

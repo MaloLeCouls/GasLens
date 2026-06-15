@@ -1,4 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join, relative, sep } from 'node:path';
 import type {
   ApiCallChainRecord,
@@ -62,6 +63,17 @@ import type {
 export interface ScanOptions {
   /** Racine du projet à scanner. */
   root: string;
+  /** Si fourni, appelé avec un breakdown des timings à la fin du scan. */
+  onBench?: (bench: ScanBench) => void;
+}
+
+export interface ScanBench {
+  total_ms: number;
+  read_files_ms: number;
+  parse_and_extract_ms: number;
+  rest_ms: number;
+  files_count: number;
+  functions_count: number;
 }
 
 interface FileBundle {
@@ -90,17 +102,35 @@ interface ContractContribution {
 }
 
 export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
+  const t0 = Date.now();
   const manifest = await readManifest(opts.root);
   const libraryPrefixes = new Set(manifest.libraryPrefixes);
 
   const { gsFiles, htmlFiles } = await collectSourceFiles(opts.root);
+  const file_hashes: Record<string, string> = {};
+  const manifestPath = join(opts.root, 'appsscript.json');
+  // Hash du manifeste (utile pour détecter les changements de scopes/libs).
+  try {
+    const mtext = await readFile(manifestPath, 'utf8');
+    file_hashes['appsscript.json'] = sha1(mtext);
+  } catch {
+    // pas de manifeste → pas de hash
+  }
   const bundles: FileBundle[] = [];
+  const tReadStart = Date.now();
+  let readMs = 0;
+  let parseExtractMs = 0;
   for (const absPath of gsFiles) {
     const rel = toPosix(relative(opts.root, absPath));
+    const tRead = Date.now();
     const source = await readFile(absPath, 'utf8');
+    readMs += Date.now() - tRead;
+    file_hashes[rel] = sha1(source);
+    const tParse = Date.now();
     const tree = parseSource(source);
     const defs = extractDefinitions(tree.rootNode, rel);
     const topLevelCalls = extractCallSites(tree.rootNode);
+    parseExtractMs += Date.now() - tParse;
     bundles.push({ fileRel: rel, defs, topLevelCalls });
   }
 
@@ -108,10 +138,16 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   const html_webapp_signals: HtmlWebappFileSignals[] = [];
   for (const absPath of htmlFiles) {
     const rel = toPosix(relative(opts.root, absPath));
+    const tRead = Date.now();
     const source = await readFile(absPath, 'utf8');
+    readMs += Date.now() - tRead;
+    file_hashes[rel] = sha1(source);
+    const tParse = Date.now();
     htmlBundles.push(processHtmlFile(rel, source));
     html_webapp_signals.push(extractHtmlWebappSignals(rel, source));
+    parseExtractMs += Date.now() - tParse;
   }
+  void tReadStart;
 
   // Pass 1 : construire les records et l'index { nom → record }.
   // GAS partage un namespace global au sein d'un projet : par défaut une fonction
@@ -427,7 +463,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     ...htmlBundles.map((h) => h.fileRel),
   ].sort();
 
-  return {
+  const result: ProjectIndex = {
     kind: 'project',
     project: manifest.projectName,
     root: opts.root,
@@ -451,7 +487,25 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     manifest: manifest.manifest,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],
+    file_hashes,
+    scan_duration_ms: Date.now() - t0,
   };
+  const total = Date.now() - t0;
+  if (opts.onBench) {
+    opts.onBench({
+      total_ms: total,
+      read_files_ms: readMs,
+      parse_and_extract_ms: parseExtractMs,
+      rest_ms: Math.max(0, total - readMs - parseExtractMs),
+      files_count: gsFiles.length + htmlFiles.length,
+      functions_count: result.functions.length,
+    });
+  }
+  return result;
+}
+
+function sha1(s: string): string {
+  return createHash('sha1').update(s).digest('hex');
 }
 
 function buildCoverageSummary(
@@ -521,19 +575,20 @@ function classifyUnresolved(what: string): string {
  */
 export async function scanWorkspace(opts: {
   root: string;
+  onBench?: (bench: ScanBench) => void;
 }): Promise<WorkspaceIndex | ProjectIndex> {
   const projectRoots = await findProjectRoots(opts.root);
   if (projectRoots.length === 0) {
     // pas de manifeste : on traite quand même `root` comme un projet implicite.
-    return scanProject({ root: opts.root });
+    return scanProject({ root: opts.root, onBench: opts.onBench });
   }
   if (projectRoots.length === 1) {
-    return scanProject({ root: projectRoots[0]! });
+    return scanProject({ root: projectRoots[0]!, onBench: opts.onBench });
   }
 
   const projects: ProjectIndex[] = [];
   for (const r of projectRoots) {
-    projects.push(await scanProject({ root: r }));
+    projects.push(await scanProject({ root: r, onBench: opts.onBench }));
   }
 
   const projectByName = new Map(projects.map((p) => [p.project, p]));

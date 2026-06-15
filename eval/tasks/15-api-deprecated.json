@@ -1,0 +1,16 @@
+{
+  "name": "api-deprecated",
+  "description": "Un agent introduit Utilities.jsonParse au lieu de JSON.parse. validate-api doit lever WARN api.deprecated avec suggestion (V3 §21.2 phase 3).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "function formatReport(data) {\n  return 'Rapport: ' + JSON.stringify(data);",
+      "after": "function formatReport(data) {\n  return 'Rapport: ' + Utilities.jsonStringify(data);"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}

@@ -277,6 +277,47 @@ describe('validate-api — api.wrong_arity', () => {
   });
 });
 
+describe('validate-api — api.deprecated', () => {
+  it('WARN sur Utilities.jsonParse avec suggestion JSON.parse', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go(s) { return Utilities.jsonParse(s); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('WARN');
+      const e = report.entries[0]!;
+      expect(e.kind).toBe('api.deprecated');
+      expect(e.method).toBe('jsonParse');
+      expect(e.deprecation_replacement).toBe('JSON.parse(str)');
+      expect(report.findings[0]?.consumer_kind).toBe('api.deprecated');
+      expect(report.findings[0]?.severity).toBe('warn');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('continue la validation de la chaîne après une méthode dépréciée', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go(s) {
+        // jsonParse return est 'unknown', la chaîne s'arrête honnêtement après — pas de faux positif.
+        return Utilities.jsonParse(s);
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      // Doit y avoir un WARN, mais aucun BREAK.
+      expect(report.entries.some((e) => e.kind === 'api.deprecated')).toBe(true);
+      expect(report.entries.some((e) => e.kind === 'api.unknown_method')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('validate-api — rendu texte', () => {
   it("inclut project, verdict, méthode hallucinée et suggestion", async () => {
     const root = await makeProject({
