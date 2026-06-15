@@ -362,6 +362,38 @@ export interface RuntimeSignals {
   has_any_delete_trigger: boolean;
 }
 
+export interface HtmlWebappMixedContentRef {
+  tag: string;
+  attr: string;
+  url: string;
+  line: number;
+}
+
+export interface HtmlWebappLinkWithoutTarget {
+  href: string;
+  line: number;
+}
+
+export interface HtmlWebappFormSubmitIssue {
+  inline_handler: string | null;
+  has_submit_control: boolean;
+  line: number;
+}
+
+export interface HtmlWebappScriptHttpFetch {
+  url: string;
+  line: number;
+}
+
+export interface HtmlWebappFileSignals {
+  file: string;
+  has_base_target_top: boolean;
+  mixed_content_refs: HtmlWebappMixedContentRef[];
+  links_without_target: HtmlWebappLinkWithoutTarget[];
+  forms_without_preventDefault: HtmlWebappFormSubmitIssue[];
+  script_http_fetches: HtmlWebappScriptHttpFetch[];
+}
+
 export interface ProjectIndex {
   /** Discriminant pour les outils consommateurs (`workspace` ailleurs). */
   kind?: 'project';
@@ -380,6 +412,8 @@ export interface ProjectIndex {
   api_call_chains: ApiCallChainRecord[];
   /** Signaux pour lint-runtime (V3 §21.3) : boucles, locks, triggers. */
   runtime_signals: RuntimeSignals;
+  /** Signaux côté HTML pour lint-webapp (V3 §21.4). */
+  html_webapp_signals: HtmlWebappFileSignals[];
   /** Manifeste parsé — source pour `gaslens manifest` (V3 §21.1). */
   manifest: ProjectManifest;
   /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */

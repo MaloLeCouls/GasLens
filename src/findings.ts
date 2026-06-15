@@ -26,7 +26,10 @@ export type ConsumerKind =
   | 'lint.quota_in_loop'
   | 'lint.urlfetch_in_loop'
   | 'lint.lock_no_finally'
-  | 'lint.trigger_orphan';
+  | 'lint.trigger_orphan'
+  | 'webapp.mixed_content'
+  | 'webapp.link_target'
+  | 'webapp.form_submit';
 
 export type Confidence = 'high' | 'medium' | 'low';
 

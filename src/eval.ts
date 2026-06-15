@@ -8,6 +8,7 @@ import {
   enrichWithManifestFindings,
   enrichWithApiFindings,
   enrichWithLintRuntimeFindings,
+  enrichWithLintWebappFindings,
 } from './check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 import type {
@@ -244,10 +245,11 @@ function diffSingleProject(
     severity_threshold: 'warn',
   });
   // L'eval reflète ce que le hook (`check`) verra : on enrichit avec les
-  // findings manifeste + validate-api + lint-runtime de l'état courant.
+  // findings manifeste + validate-api + lint-runtime + lint-webapp de l'état courant.
   const m = enrichWithManifestFindings(base, current, 'warn');
   const a = enrichWithApiFindings(m, current, 'warn');
-  return enrichWithLintRuntimeFindings(a, current, 'warn');
+  const r = enrichWithLintRuntimeFindings(a, current, 'warn');
+  return enrichWithLintWebappFindings(r, current, 'warn');
 }
 
 async function copyTree(src: string, dst: string): Promise<void> {

@@ -52,6 +52,7 @@ src/
     return-analysis.ts         shape de retour, nullabilité, sérialisabilité
     api-chains.ts              chaînes d'appels Service.m1().m2()… (alimente validate-api)
     runtime-patterns.ts        signaux pour lint-runtime (calls dans boucles, lock/finally, trigger create/delete)
+    html-webapp.ts             signaux pour lint-webapp (refs http://, <a> sans target, <form> sans preventDefault, <base target>)
     uncertainty.ts             alimente coverage (dispatch dynamique, etc.)
   inspect.ts / impact.ts / diff.ts / check.ts / hook.ts    les commandes
   map.ts                       table des matières compacte (V3 §21.5) — projection seule de l'index
@@ -61,6 +62,7 @@ src/
   validate-api.ts              valide les chaînes d'appels GAS contre gas-api.ts (V3 §21.2) : api.unknown_method + suggestions fuzzy
   gas-api.ts                   registre curé Service→Method→ReturnType pour ~15 services natifs (source: doc + @types/google-apps-script)
   lint-runtime.ts              lint heuristique GAS-aware (V3 §21.3) : quota.value_in_loop, urlfetch.in_loop, lock.no_finally, trigger.orphan
+  lint-webapp.ts               lint des .html servis (V3 §21.4) : webapp.mixed_content, webapp.link_target, webapp.form_submit
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
   eval.ts                      rejoue eval/tasks/*.json (inclut findings manifeste + validate-api via enrichWith*Findings)
   init.ts                      recettes CLAUDE.md / settings.json (V2 §16)
@@ -93,7 +95,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~219 tests)
+npm test             # vitest run  (doit rester vert ; ~231 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -115,7 +117,7 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
 
 `manifest` (V3 §21.1) — Phases 1 + 2 livrées : `library.undeclared/.unused`, `advanced_service.missing/.unused` (phase 1, confidence high), `scope.missing/.unused` (WARN/INFO, confidence medium, **silencieux quand `oauthScopes` n'est pas explicite** car l'auto-détection Google joue), `urlfetch.not_whitelisted` (WARN, **silencieux quand `urlFetchWhitelist` est absent**, URLs littérales seulement). Câblé dans `check` via `enrichWithManifestFindings`. Table service→scope dans `scopes.ts`. **Restent** : `scope.over_broad` (info, prudent), gestion de `@OnlyCurrentDoc`.
 
@@ -123,8 +125,9 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `inspe
 
 `lint-runtime` (V3 §21.3) — Phase 1 livrée (WARN/INFO, jamais BREAK) : `quota.value_in_loop` (getValue/setValue/appendRow/… dans for/while/forEach/map), `urlfetch.in_loop` (suggère fetchAll), `lock.no_finally` (waitLock/tryLock sans releaseLock dans finally du même scope), `trigger.orphan` (INFO niveau projet — newTrigger().create() sans deleteTrigger). Câblé dans `check` via `enrichWithLintRuntimeFindings`. **Restent** : `longrun.no_state` (heuristique 6 min, peu net pour V1).
 
+`lint-webapp` (V3 §21.4) — Phase 1 livrée (WARN, confidence high/medium) : `webapp.mixed_content` (http:// dans tags script/link/img/iframe/source/video/audio + fetch/XHR/img.src côté JS client), `webapp.link_target` (`<a href>` de navigation sans target=, silencieux si `<base target="_top">` global), `webapp.form_submit` (`<form>` avec input/button submit sans `preventDefault`/`return false`). Câblé dans `check` via `enrichWithLintWebappFindings`. **Restent** : `webapp.run_out_of_context` (vague pour V1).
+
 À construire (détail + intérêt dans V3) :
-- **`lint-webapp`** (V3 §21.4) — `warn`/`info` sur les `.html` servis : mixed_content, link_target, form_submit, run_out_of_context. Le pipeline HTML est déjà là.
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
 - `emit-contract-tests --runner gas-fakes` (V3 §23) ; wrapper **MCP** + **Skill** (V3 §24).
 

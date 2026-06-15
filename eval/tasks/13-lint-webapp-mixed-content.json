@@ -1,0 +1,16 @@
+{
+  "name": "lint-webapp-mixed-content",
+  "description": "Un agent introduit un <script src=\"http://...\"> dans le template HTML. lint-webapp doit lever WARN (V3 §21.4) — la ressource est bloquée par le sandbox HTTPS de la web app GAS.",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "dashboard.html",
+      "before_contains": "<?!= include('styles') ?>",
+      "after": "<?!= include('styles') ?>\n    <script src=\"http://cdn.example.com/legacy.js\"></script>"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}

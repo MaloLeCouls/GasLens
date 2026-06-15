@@ -8,6 +8,7 @@ import type {
   CrossProjectEdge,
   Exposure,
   FunctionRecord,
+  HtmlWebappFileSignals,
   PendingLibraryCall,
   ProjectIndex,
   ReceiverUsage,
@@ -25,6 +26,7 @@ import { extractDefinitions, type RawDefinition } from './extract/definitions.js
 import { extractCallSites, type RawCallSite } from './extract/calls.js';
 import { extractApiCallChains } from './extract/api-chains.js';
 import { extractRuntimePatterns } from './extract/runtime-patterns.js';
+import { extractHtmlWebappSignals } from './extract/html-webapp.js';
 import {
   exposuresFromName,
   installableTriggersFromCalls,
@@ -103,10 +105,12 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   }
 
   const htmlBundles: HtmlFileBundle[] = [];
+  const html_webapp_signals: HtmlWebappFileSignals[] = [];
   for (const absPath of htmlFiles) {
     const rel = toPosix(relative(opts.root, absPath));
     const source = await readFile(absPath, 'utf8');
     htmlBundles.push(processHtmlFile(rel, source));
+    html_webapp_signals.push(extractHtmlWebappSignals(rel, source));
   }
 
   // Pass 1 : construire les records et l'index { nom → record }.
@@ -443,6 +447,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       trigger_creates,
       has_any_delete_trigger,
     } satisfies RuntimeSignals,
+    html_webapp_signals,
     manifest: manifest.manifest,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],
