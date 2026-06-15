@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CLAUDE_MD_ROOT,
   CLAUDE_SETTINGS_JSON,
+  GASLENS_SKILL_MD,
   SETUP_GUIDE,
   claudeMdSubrepo,
 } from '../src/init.js';
@@ -34,5 +35,40 @@ describe('init — recettes V2 §16', () => {
     expect(SETUP_GUIDE).toContain('gaslens scan');
     expect(SETUP_GUIDE).toContain(CLAUDE_MD_ROOT.split('\n')[0]!);
     expect(SETUP_GUIDE).toContain('PostToolUse');
+  });
+
+  it("Skill Claude Code expose le frontmatter `name`/`description` et le workflow", () => {
+    expect(GASLENS_SKILL_MD.startsWith('---\n')).toBe(true);
+    expect(GASLENS_SKILL_MD).toContain('name: gaslens');
+    expect(GASLENS_SKILL_MD).toMatch(/description:\s/);
+    // Quand utiliser → setup → workflow par tâche → commandes → discipline.
+    expect(GASLENS_SKILL_MD).toContain('Quand utiliser cette skill');
+    expect(GASLENS_SKILL_MD).toContain('Setup');
+    expect(GASLENS_SKILL_MD).toContain('Workflow par tâche');
+    expect(GASLENS_SKILL_MD).toContain('--compact');
+    expect(GASLENS_SKILL_MD).toContain("Exit codes");
+    expect(GASLENS_SKILL_MD).toContain("coverage.unresolved");
+  });
+
+  it("Skill liste les 14 commandes principales (au moins celles attendues)", () => {
+    for (const cmd of [
+      'scan',
+      'map',
+      'inspect',
+      'impact',
+      'diff',
+      'check',
+      'manifest',
+      'validate-api',
+      'lint-runtime',
+      'lint-webapp',
+      'emit-dts',
+      'emit-contract-tests',
+      'commands',
+      'init',
+      'eval',
+    ]) {
+      expect(GASLENS_SKILL_MD).toContain(cmd);
+    }
   });
 });

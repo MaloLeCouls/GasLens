@@ -50,6 +50,128 @@ en \`coverage.external_boundaries\`. Traite ces cas avec prudence.
 `;
 }
 
+export const GASLENS_SKILL_MD = `---
+name: gaslens
+description: Analyse statique d'un projet Google Apps Script (.gs / .html / appsscript.json) : détecte les régressions structurelles, les méthodes API hallucinées, les décalages avec appsscript.json (libs/scopes/services avancés), les anti-patterns quota et les bugs web app. Utilise cette skill chaque fois que tu édites, refactores, debugges ou raisonnes sur du code GAS. Outils CLI hors-ligne, instantanés, exit codes structurés.
+---
+
+# Quand utiliser cette skill
+
+Tu travailles sur un projet **Google Apps Script** (présence d'\`appsscript.json\`,
+de fichiers \`.gs\`, de templates \`.html\` servis par HtmlService). Avant de
+modifier ou raisonner sur du code GAS, utilise \`gaslens\` pour obtenir le
+contexte structurel que \`tsc\` / un linter générique ne donne pas (couture
+\`google.script.run\`, scriptlets, triggers par chaîne, méthodes API,
+manifeste, web app sandbox).
+
+# Setup (une seule fois par projet)
+
+\`\`\`bash
+# 1. Construit l'index baseline (à la racine du projet ou du workspace).
+gaslens scan <root> -o <root>/.gaslens/baseline.json
+
+# 2. (Optionnel mais recommandé) Câble le hook PostToolUse Claude Code.
+gaslens init --section settings-json   # bloc .claude/settings.json prêt à coller
+\`\`\`
+
+Quand le hook est câblé, \`gaslens check\` tourne automatiquement après chaque
+édition. Sinon, lance-le manuellement (cf. ci-dessous).
+
+# Workflow par tâche (économie de tokens)
+
+1. **Carte du projet (~300 tokens)** — la table des matières anti-orientation.
+   \`\`\`bash
+   gaslens map --format text
+   \`\`\`
+   Tu obtiens en une vue : entry points web (doGet/doPost), triggers, fonctions
+   exposées au client via \`google.script.run\`, librairies consommées/exposées,
+   templates scriptlet. Lis-le AVANT d'explorer.
+
+2. **Avant d'éditer une fonction serveur** :
+   \`\`\`bash
+   gaslens inspect <fonction> --detail-level standard --compact
+   \`\`\`
+   Signature, expositions, callers, callees, contrat de retour inféré (incluant
+   les champs lus par les \`successHandler\` côté client).
+
+3. **Pour une mutation envisagée** (avant d'écrire la modif) :
+   \`\`\`bash
+   gaslens impact <fonction> --change 'change-return-shape:-msgId,+ok' --compact
+   # autres DSL : remove-param:name | rename:newName | rename-param:old=new
+   \`\`\`
+
+4. **Après édition** (auto si le hook est câblé) :
+   \`\`\`bash
+   gaslens check --baseline ./.gaslens/baseline.json
+   \`\`\`
+   Enrichi avec : diff structurel + manifest + validate-api + lint-runtime
+   + lint-webapp. Si verdict=BREAK, corrige selon les \`fix_hint\` avant de
+   continuer.
+
+# Commandes (toutes acceptent --format json|text et --compact)
+
+| Commande | Rôle |
+|---|---|
+| \`scan <root>\` | Construit l'index (à relancer après un batch d'édits) |
+| \`map\` | Aperçu compact projet/workspace |
+| \`inspect <fn>\` | Tout sur une fonction (signature, callers, contrat) |
+| \`impact <fn> --change\` | Régressions potentielles d'une mutation décrite |
+| \`diff --from <baseline> --to <current>\` | Compare deux index |
+| \`check --baseline\` | Diff + manifest + API + lint runtime + lint webapp |
+| \`manifest\` | Croise code ↔ appsscript.json (libs/scopes/services/whitelist) |
+| \`validate-api\` | Méthodes GAS hallucinées + arity manquante |
+| \`lint-runtime\` | Quota/lock/trigger anti-patterns (warn/info) |
+| \`lint-webapp\` | mixed_content / link_target / form_submit (warn) |
+| \`emit-dts\` | .d.ts pour \`google.script.run\` côté client |
+| \`emit-contract-tests\` | Harnais \`.gs\` de test de contrat (sandbox uniquement) |
+| \`commands\` | Liste compacte JSON de toutes les commandes |
+| \`init\` | Recettes CLAUDE.md / settings.json / skill |
+| \`eval\` | Rejoue le dataset de référence (tests d'intégration) |
+
+# Discipline d'honnêteté (lis ceci avant de raisonner)
+
+- \`gaslens\` marque EXPLICITEMENT ce qu'il ne peut pas trancher dans
+  \`coverage.unresolved\` et \`coverage.external_boundaries\`. Si la couverture
+  < 100 %, vérifie UNIQUEMENT les points listés — pas tout le repo.
+- \`break\` (verdict BREAK) est réservé aux régressions **structurellement
+  certaines**. Les heuristiques (\`lint-*\`, \`manifest.scope.*\`,
+  \`manifest.urlfetch.*\`) sortent en \`warn\`/\`info\` avec \`confidence:
+  medium|low\`.
+- \`gaslens\` ne voit JAMAIS : régressions sémantiques (champ identique, sens
+  changé), code mort réel vs apparent, comportement sous charge.
+
+# Exit codes (scripting, hook, CI)
+
+  0 = CLEAN
+  3 = BREAK (régression structurelle — bloque)
+  4 = WARN (heuristique — examiner)
+  2 = erreur d'outillage (chemin introuvable, JSON cassé, etc.)
+
+# Économie de tokens
+
+- \`--compact\` partout : JSON sans indentation (~30 % tokens en moins).
+- \`--format text\` pour \`map\`/\`manifest\`/\`validate-api\`/\`lint-*\` : encore
+  plus dense, idéal pour aperçus.
+- \`inspect --detail-level summary\` pour une vue minimale ; \`full\` pour tout.
+- Plafond \`--max-callers <n>\` sur \`inspect\` pour les fonctions très appelées.
+
+# Erreurs typiques (et leur fix)
+
+- \`index introuvable à ./.gaslens/index.json\` →
+  \`gaslens scan <root> -o <root>/.gaslens/index.json\`
+- \`La fonction 'X' est introuvable\` → relance avec \`--fuzzy\` pour les
+  suggestions de noms proches.
+- Workspace ambigu (\`'X' existe dans plusieurs projets\`) → précise
+  \`--project <nom>\`.
+
+# Notes de design (V1/V2/V3)
+
+GAS-Lens est conçu comme un **outil pour agent IA**, pas pour humain. Sorties
+auto-suffisantes (\`verdict\` + \`summary\` en tête), IDs sémantiques
+\`Project::file::fn\`, chemins relatifs + ligne partout. Cœur 100 % statique
+et hors-ligne — pas de réseau ni d'auth dans le chemin chaud (V2 §15.2).
+`;
+
 export const CLAUDE_SETTINGS_JSON = `{
   "hooks": {
     "PostToolUse": [
@@ -80,7 +202,12 @@ ${CLAUDE_MD_ROOT}
 
 ${CLAUDE_SETTINGS_JSON}
 
-4. (Optionnel) Pour chaque sous-projet, ajoute un CLAUDE.md local (V2 §16.2).
+4. (Optionnel) Installe la Skill pour Claude Code (chargement paresseux,
+   zéro coût de schéma quand inutilisée) :
+     gaslens init --section skill --write
+   → écrit .claude/skills/gaslens/SKILL.md à la racine du repo.
+
+5. (Optionnel) Pour chaque sous-projet, ajoute un CLAUDE.md local (V2 §16.2).
 `;
 
 export interface InitWriteResult {

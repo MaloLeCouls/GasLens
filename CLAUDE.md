@@ -65,7 +65,8 @@ src/
   lint-webapp.ts               lint des .html servis (V3 §21.4) : webapp.mixed_content, webapp.link_target, webapp.form_submit
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
   eval.ts                      rejoue eval/tasks/*.json (inclut findings manifeste + validate-api via enrichWith*Findings)
-  init.ts                      recettes CLAUDE.md / settings.json (V2 §16)
+  init.ts                      recettes CLAUDE.md / settings.json / SKILL.md (V2 §16, V3 §24) — `init --write` écrit aux bons chemins
+  stale-check.ts               compare scanned_at à la plus récente mtime des sources ; warn stderr + commande de re-scan
   gas-services.ts              liste de NOMS de services natifs (utilisée par le scanner pour classifier les receivers ; validation par méthode = gas-api.ts)
 eval/tasks/*.json              jeu de tâches de référence (édition → verdict attendu)
 tests/                         vitest ; fixtures/sample-project + fixtures/sample-workspace
@@ -95,7 +96,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~237 tests)
+npm test             # vitest run  (doit rester vert ; ~243 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -117,7 +118,13 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
+
+**Ergonomie LLM (V3 §24 + extensions)** :
+- `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.
+- `init --section skill --write` — installe `.claude/skills/gaslens/SKILL.md` (chargement paresseux, zéro coût tant qu'inutilisé).
+- `--compact` sur toutes les commandes read-only — JSON sans indentation, ~30 % tokens en moins.
+- Détection d'index stale (`stale-check.ts`) — warning stderr automatique quand une source est plus récente que l'index, avec la commande exacte de re-scan.
 
 `manifest` (V3 §21.1) — Phases 1 + 2 livrées : `library.undeclared/.unused`, `advanced_service.missing/.unused` (phase 1, confidence high), `scope.missing/.unused` (WARN/INFO, confidence medium, **silencieux quand `oauthScopes` n'est pas explicite** car l'auto-détection Google joue), `urlfetch.not_whitelisted` (WARN, **silencieux quand `urlFetchWhitelist` est absent**, URLs littérales seulement). Câblé dans `check` via `enrichWithManifestFindings`. Table service→scope dans `scopes.ts`. **Restent** : `scope.over_broad` (info, prudent), gestion de `@OnlyCurrentDoc`.
 

@@ -17,6 +17,7 @@ import { runHook } from './hook.js';
 import {
   CLAUDE_MD_ROOT,
   CLAUDE_SETTINGS_JSON,
+  GASLENS_SKILL_MD,
   SETUP_GUIDE,
   claudeMdSubrepo,
 } from './init.js';
@@ -28,7 +29,13 @@ import { analyzeManifest, renderManifestText } from './manifest-analysis.js';
 import { validateApi, renderApiValidationText } from './validate-api.js';
 import { lintRuntime, renderLintRuntimeText } from './lint-runtime.js';
 import { lintWebapp, renderLintWebappText } from './lint-webapp.js';
+import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
+
+/** JSON output : pretty (indent 2) ou compact selon --compact. */
+function jsonOut(value: unknown, compact: boolean): string {
+  return compact ? JSON.stringify(value) : JSON.stringify(value, null, 2);
+}
 
 export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
@@ -133,6 +140,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un seul projet d'un index workspace")
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: MapCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -155,6 +163,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      await warnIfStale(raw, idxPath);
       if (opts.project) {
         if (raw.kind !== 'workspace') {
           process.stderr.write(
@@ -177,7 +186,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       if (opts.format === 'text') {
         process.stdout.write(renderMapText(report) + '\n');
       } else {
-        process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+        process.stdout.write(jsonOut(report, opts.compact) + '\n');
       }
     });
 
@@ -196,6 +205,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       'info',
     )
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: ManifestCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -215,6 +225,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      await warnIfStale(raw, idxPath);
       const targets: ProjectIndex[] = pickManifestTargets(raw, opts.project);
       if (targets.length === 0) {
         process.stderr.write(
@@ -240,7 +251,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.stdout.write(renderManifestText(r) + '\n');
         }
       } else {
-        process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
+        process.stdout.write(jsonOut({ verdict, projects: reports }, opts.compact) + '\n');
       }
       if (verdict === 'BREAK') process.exit(3);
       if (verdict === 'WARN') process.exit(4);
@@ -257,6 +268,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un seul projet d'un index workspace")
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: ValidateApiCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -276,6 +288,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      await warnIfStale(raw, idxPath);
       const targets = pickManifestTargets(raw, opts.project);
       if (targets.length === 0) {
         process.stderr.write(
@@ -294,7 +307,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.stdout.write(renderApiValidationText(r) + '\n');
         }
       } else {
-        process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
+        process.stdout.write(jsonOut({ verdict, projects: reports }, opts.compact) + '\n');
       }
       if (verdict === 'BREAK') process.exit(3);
       if (verdict === 'WARN') process.exit(4);
@@ -312,6 +325,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un seul projet d'un index workspace")
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: LintRuntimeCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -331,6 +345,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      await warnIfStale(raw, idxPath);
       const targets = pickManifestTargets(raw, opts.project);
       if (targets.length === 0) {
         process.stderr.write(
@@ -349,7 +364,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.stdout.write(renderLintRuntimeText(r) + '\n');
         }
       } else {
-        process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
+        process.stdout.write(jsonOut({ verdict, projects: reports }, opts.compact) + '\n');
       }
       if (verdict === 'BREAK') process.exit(3);
       if (verdict === 'WARN') process.exit(4);
@@ -367,6 +382,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un seul projet d'un index workspace")
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: LintWebappCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -386,6 +402,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      await warnIfStale(raw, idxPath);
       const targets = pickManifestTargets(raw, opts.project);
       if (targets.length === 0) {
         process.stderr.write(
@@ -404,7 +421,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.stdout.write(renderLintWebappText(r) + '\n');
         }
       } else {
-        process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
+        process.stdout.write(jsonOut({ verdict, projects: reports }, opts.compact) + '\n');
       }
       if (verdict === 'BREAK') process.exit(3);
       if (verdict === 'WARN') process.exit(4);
@@ -443,6 +460,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un projet précis dans un index workspace")
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (functionName: string, opts: InspectCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -454,11 +472,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exit(2);
       }
       let index: ProjectIndex;
+      let rawIndex: ProjectIndex | WorkspaceIndex;
       try {
-        const raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+        rawIndex = JSON.parse(await readFile(idxPath, 'utf8')) as
           | ProjectIndex
           | WorkspaceIndex;
-        const picked = pickProjectFromIndex(raw, functionName, opts.project);
+        const picked = pickProjectFromIndex(rawIndex, functionName, opts.project);
         if (picked.kind === 'error') {
           process.stderr.write(`gaslens inspect: ${picked.message}\n`);
           process.exit(picked.code);
@@ -471,6 +490,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      await warnIfStale(rawIndex, idxPath);
 
       const inspectOpts: InspectOptions = {
         detailLevel: parseDetailLevel(opts.detailLevel),
@@ -486,15 +506,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.stderr.write(result.message + '\n');
         } else {
           process.stdout.write(
-            JSON.stringify(
+            jsonOut(
               {
                 error: 'not_found',
                 name: result.name,
                 suggestions: result.suggestions,
                 message: result.message,
               },
-              null,
-              2,
+              opts.compact,
             ) + '\n',
           );
         }
@@ -504,7 +523,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       if (opts.format === 'text') {
         process.stdout.write(renderTextPayload(result.payload) + '\n');
       } else {
-        process.stdout.write(JSON.stringify(result.payload, null, 2) + '\n');
+        process.stdout.write(jsonOut(result.payload, opts.compact) + '\n');
       }
     });
 
@@ -528,6 +547,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un projet précis dans un index workspace")
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (functionName: string, opts: ImpactCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -537,11 +557,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exit(2);
       }
       let index: ProjectIndex;
+      let rawImpact: ProjectIndex | WorkspaceIndex;
       try {
-        const raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+        rawImpact = JSON.parse(await readFile(idxPath, 'utf8')) as
           | ProjectIndex
           | WorkspaceIndex;
-        const picked = pickProjectFromIndex(raw, functionName, opts.project);
+        const picked = pickProjectFromIndex(rawImpact, functionName, opts.project);
         if (picked.kind === 'error') {
           process.stderr.write(`gaslens impact: ${picked.message}\n`);
           process.exit(picked.code);
@@ -551,6 +572,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.stderr.write(`gaslens impact: index illisible — ${(err as Error).message}.\n`);
         process.exit(2);
       }
+      await warnIfStale(rawImpact, idxPath);
       let change;
       try {
         change = parseChangeSpec(opts.change);
@@ -568,7 +590,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       if (opts.format === 'text') {
         process.stdout.write(renderImpactText(r.report) + '\n');
       } else {
-        process.stdout.write(JSON.stringify(r.report, null, 2) + '\n');
+        process.stdout.write(jsonOut(r.report, opts.compact) + '\n');
       }
       // Exit codes alignés avec check (V2 §9.2) : 0=CLEAN, 3=BREAK, 4=WARN.
       if (r.report.verdict === 'BREAK') process.exit(3);
@@ -590,6 +612,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       'warn',
     )
     .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: DiffCliOpts) => {
       const fromPath = resolve(opts.from);
       const toPath = resolve(opts.to);
@@ -620,7 +643,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       if (opts.format === 'text') {
         process.stdout.write(renderDiffText(report) + '\n');
       } else {
-        process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+        process.stdout.write(jsonOut(report, opts.compact) + '\n');
       }
       if (report.verdict === 'BREAK') process.exit(3);
       if (report.verdict === 'WARN') process.exit(4);
@@ -647,6 +670,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .option('--format <fmt>', 'json | text | hook', 'json')
     .option('--quiet-when-clean', "Silencieux (pas de stdout) si verdict=CLEAN", false)
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (root: string, opts: CheckCliOpts) => {
       const baselinePath = resolve(opts.baseline);
       if (!existsSync(baselinePath)) {
@@ -678,7 +702,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         } else if (opts.format === 'hook') {
           process.stdout.write(renderHookOutput(report) + '\n');
         } else {
-          process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+          process.stdout.write(jsonOut(report, opts.compact) + '\n');
         }
         process.exit(exit_code);
       } catch (err) {
@@ -879,35 +903,78 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     });
 
   program
+    .command('commands')
+    .description(
+      "Liste compacte (~150 tokens) de toutes les commandes. Idéal pour " +
+        "qu'un agent IA découvre la surface de l'outil avant de l'utiliser.",
+    )
+    .option('--format <fmt>', 'json | text', 'json')
+    .action((opts: CommandsCliOpts) => {
+      if (opts.format === 'text') {
+        const lines = COMMANDS_OVERVIEW.map((c) => `${c.name.padEnd(22)} ${c.tldr}`);
+        process.stdout.write(lines.join('\n') + '\n');
+      } else {
+        process.stdout.write(JSON.stringify(COMMANDS_OVERVIEW) + '\n');
+      }
+    });
+
+  program
     .command('init')
     .description(
-      "Imprime les blocs prêts à coller pour câbler le hook PostToolUse " +
-        "(CLAUDE.md racine + .claude/settings.json + guide pas-à-pas). V2 §16.",
+      "Imprime (ou écrit avec --write) les recettes prêtes à coller : " +
+        "CLAUDE.md racine, .claude/settings.json (hook PostToolUse), SKILL.md " +
+        "Claude Code, guide pas-à-pas. V2 §16, V3 §24.",
     )
-    .option('--section <name>', "Sélectionne une section : guide | claude-md | settings-json | subrepo:<name>", 'guide')
+    .option('--section <name>', "Sélectionne une section : guide | claude-md | settings-json | skill | subrepo:<name>", 'guide')
+    .option('--write', "Écrit le contenu dans le bon fichier au lieu de l'imprimer (jamais d'écrasement, --force pour outrepasser)", false)
+    .option('--force', "Avec --write : autorise l'écrasement d'un fichier existant", false)
+    .option('--root <path>', "Racine du repo pour --write. Défaut : cwd", '.')
     .action(async (opts: InitCliOpts) => {
       const s = opts.section;
+      let payload: string;
+      let writePath: string | null = null;
       if (s === 'guide') {
-        process.stdout.write(SETUP_GUIDE);
-        return;
-      }
-      if (s === 'claude-md') {
-        process.stdout.write(CLAUDE_MD_ROOT);
-        return;
-      }
-      if (s === 'settings-json') {
-        process.stdout.write(CLAUDE_SETTINGS_JSON);
-        return;
-      }
-      if (s.startsWith('subrepo:')) {
+        payload = SETUP_GUIDE;
+      } else if (s === 'claude-md') {
+        payload = CLAUDE_MD_ROOT;
+        writePath = 'CLAUDE.md';
+      } else if (s === 'settings-json') {
+        payload = CLAUDE_SETTINGS_JSON;
+        writePath = '.claude/settings.json';
+      } else if (s === 'skill') {
+        payload = GASLENS_SKILL_MD;
+        writePath = '.claude/skills/gaslens/SKILL.md';
+      } else if (s.startsWith('subrepo:')) {
         const name = s.slice('subrepo:'.length).trim() || '<NomProjet>';
-        process.stdout.write(claudeMdSubrepo(name));
+        payload = claudeMdSubrepo(name);
+        writePath = `${name}/CLAUDE.md`;
+      } else {
+        process.stderr.write(
+          `gaslens init: --section inconnue ('${s}'). Attendu : guide | claude-md | settings-json | skill | subrepo:<nom>.\n`,
+        );
+        process.exit(2);
+      }
+
+      if (!opts.write) {
+        process.stdout.write(payload);
         return;
       }
-      process.stderr.write(
-        `gaslens init: --section inconnue ('${s}'). Attendu : guide | claude-md | settings-json | subrepo:<nom>.\n`,
-      );
-      process.exit(2);
+      if (!writePath) {
+        process.stderr.write(
+          `gaslens init: --write n'est pas applicable à la section '${s}' (pas de fichier cible).\n`,
+        );
+        process.exit(2);
+      }
+      const full = resolve(opts.root, writePath);
+      if (existsSync(full) && !opts.force) {
+        process.stderr.write(
+          `gaslens init: ${full} existe déjà. Relance avec --force pour écraser.\n`,
+        );
+        process.exit(2);
+      }
+      await mkdir(dirname(full), { recursive: true });
+      await writeFile(full, payload, 'utf8');
+      process.stderr.write(`gaslens init: → ${full}\n`);
     });
 
   await program.parseAsync(argv);
@@ -919,7 +986,40 @@ interface HookCliOpts {
 
 interface InitCliOpts {
   section: string;
+  write: boolean;
+  force: boolean;
+  root: string;
 }
+
+interface CommandsCliOpts {
+  format: string;
+}
+
+interface CommandOverviewEntry {
+  name: string;
+  tldr: string;
+  reads_index: boolean;
+  emits_findings: boolean;
+}
+
+const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
+  { name: 'scan <root>', tldr: "construit l'index (.gs/.html/appsscript.json)", reads_index: false, emits_findings: false },
+  { name: 'map', tldr: 'aperçu compact projet/workspace (~300 tokens)', reads_index: true, emits_findings: false },
+  { name: 'inspect <fn>', tldr: 'signature/callers/contrat/coverage par fonction', reads_index: true, emits_findings: false },
+  { name: 'impact <fn> --change', tldr: 'régressions potentielles d\'une mutation décrite', reads_index: true, emits_findings: true },
+  { name: 'diff', tldr: 'compare deux index (--from/--to)', reads_index: true, emits_findings: true },
+  { name: 'check --baseline', tldr: 'diff + manifest + API + lint runtime + lint webapp', reads_index: true, emits_findings: true },
+  { name: 'manifest', tldr: 'code ↔ appsscript.json (libs/scopes/services/whitelist)', reads_index: true, emits_findings: true },
+  { name: 'validate-api', tldr: 'méthodes GAS hallucinées + arity manquante', reads_index: true, emits_findings: true },
+  { name: 'lint-runtime', tldr: 'quota/lock/trigger anti-patterns (warn/info)', reads_index: true, emits_findings: true },
+  { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
+  { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
+  { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
+  { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
+  { name: 'init', tldr: 'recettes CLAUDE.md / settings.json / SKILL.md', reads_index: false, emits_findings: false },
+  { name: 'eval', tldr: 'rejoue le dataset de référence', reads_index: false, emits_findings: false },
+  { name: 'commands', tldr: 'cette liste', reads_index: false, emits_findings: false },
+];
 
 async function readAllStdin(): Promise<string> {
   if (process.stdin.isTTY) return '';
@@ -955,6 +1055,7 @@ interface DiffCliOpts {
   to: string;
   severityThreshold: string;
   format: string;
+  compact: boolean;
 }
 
 interface CheckCliOpts {
@@ -963,6 +1064,7 @@ interface CheckCliOpts {
   severityThreshold: string;
   format: string;
   quietWhenClean: boolean;
+  compact: boolean;
 }
 
 function renderDiffText(r: {
@@ -1018,6 +1120,7 @@ interface ImpactCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+  compact: boolean;
 }
 
 function renderImpactText(r: {
@@ -1056,12 +1159,14 @@ interface InspectCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+  compact: boolean;
 }
 
 interface MapCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+  compact: boolean;
 }
 
 interface ManifestCliOpts {
@@ -1069,24 +1174,28 @@ interface ManifestCliOpts {
   project?: string;
   severityThreshold: string;
   format: string;
+  compact: boolean;
 }
 
 interface ValidateApiCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+  compact: boolean;
 }
 
 interface LintRuntimeCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+  compact: boolean;
 }
 
 interface LintWebappCliOpts {
   indexPath: string;
   project?: string;
   format: string;
+  compact: boolean;
 }
 
 function pickManifestTargets(
