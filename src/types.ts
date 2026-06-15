@@ -319,6 +319,49 @@ export interface ApiCallChainRecord {
   truncated_at_root: boolean;
 }
 
+export interface RuntimeSignalValueCallInLoop {
+  function: string;
+  file: string;
+  method: string;
+  loop_kind: string;
+  line: number;
+  col: number;
+}
+
+export interface RuntimeSignalFetchInLoop {
+  function: string;
+  file: string;
+  loop_kind: string;
+  line: number;
+  col: number;
+}
+
+export interface RuntimeSignalLockAcquisition {
+  function: string;
+  file: string;
+  method: 'waitLock' | 'tryLock';
+  line: number;
+  col: number;
+  has_release_in_finally: boolean;
+}
+
+export interface RuntimeSignalTriggerCreate {
+  function: string;
+  file: string;
+  line: number;
+  col: number;
+  handler_name: string | null;
+}
+
+export interface RuntimeSignals {
+  value_calls_in_loops: RuntimeSignalValueCallInLoop[];
+  fetches_in_loops: RuntimeSignalFetchInLoop[];
+  lock_acquisitions: RuntimeSignalLockAcquisition[];
+  trigger_creates: RuntimeSignalTriggerCreate[];
+  /** Au moins un appel ScriptApp.deleteTrigger / deleteTrigger() ailleurs dans le projet. */
+  has_any_delete_trigger: boolean;
+}
+
 export interface ProjectIndex {
   /** Discriminant pour les outils consommateurs (`workspace` ailleurs). */
   kind?: 'project';
@@ -335,6 +378,8 @@ export interface ProjectIndex {
   receiver_usage: ReceiverUsage[];
   /** Chaînes d'appels (Service.m1().m2()) à valider contre le registre GAS (V3 §21.2). */
   api_call_chains: ApiCallChainRecord[];
+  /** Signaux pour lint-runtime (V3 §21.3) : boucles, locks, triggers. */
+  runtime_signals: RuntimeSignals;
   /** Manifeste parsé — source pour `gaslens manifest` (V3 §21.1). */
   manifest: ProjectManifest;
   /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */

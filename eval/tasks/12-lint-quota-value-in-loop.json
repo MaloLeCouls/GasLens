@@ -1,0 +1,16 @@
+{
+  "name": "lint-quota-value-in-loop",
+  "description": "Un agent introduit setValue() dans une boucle (anti-pattern quota GAS). WARN attendu de lint-runtime (V3 §21.3).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "email.gs",
+      "before_contains": "const body = formatReport(reportData);",
+      "after": "const body = formatReport(reportData);\n  const sheet = SpreadsheetApp.getActive().getActiveSheet();\n  for (var i = 0; i < recipients.length; i++) { sheet.getRange(i + 1, 1).setValue(recipients[i]); }"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}

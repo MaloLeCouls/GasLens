@@ -11,6 +11,11 @@ import type {
   PendingLibraryCall,
   ProjectIndex,
   ReceiverUsage,
+  RuntimeSignalFetchInLoop,
+  RuntimeSignalLockAcquisition,
+  RuntimeSignalTriggerCreate,
+  RuntimeSignalValueCallInLoop,
+  RuntimeSignals,
   ScriptletKindLabel,
   UnresolvedCall,
   WorkspaceIndex,
@@ -19,6 +24,7 @@ import { parseSource } from './parser.js';
 import { extractDefinitions, type RawDefinition } from './extract/definitions.js';
 import { extractCallSites, type RawCallSite } from './extract/calls.js';
 import { extractApiCallChains } from './extract/api-chains.js';
+import { extractRuntimePatterns } from './extract/runtime-patterns.js';
 import {
   exposuresFromName,
   installableTriggersFromCalls,
@@ -158,6 +164,11 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   const pending_library_calls: PendingLibraryCall[] = [];
   const receiver_usage: ReceiverUsage[] = [];
   const api_call_chains: ApiCallChainRecord[] = [];
+  const value_calls_in_loops: RuntimeSignalValueCallInLoop[] = [];
+  const fetches_in_loops: RuntimeSignalFetchInLoop[] = [];
+  const lock_acquisitions: RuntimeSignalLockAcquisition[] = [];
+  const trigger_creates: RuntimeSignalTriggerCreate[] = [];
+  let has_any_delete_trigger = false;
   for (const b of bundles) {
     // a) Expositions installable_trigger : sur *tout* le fichier, peu importe le caller.
     const trigMap = installableTriggersFromCalls(b.topLevelCalls, b.fileRel);
@@ -206,6 +217,46 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
           truncated_at_root: chain.truncated_at_root,
         });
       }
+      const runtime = extractRuntimePatterns(def.bodyNode);
+      for (const v of runtime.value_calls_in_loops) {
+        value_calls_in_loops.push({
+          function: def.name,
+          file: b.fileRel,
+          method: v.method,
+          loop_kind: v.loop_kind,
+          line: v.line,
+          col: v.col,
+        });
+      }
+      for (const f of runtime.fetches_in_loops) {
+        fetches_in_loops.push({
+          function: def.name,
+          file: b.fileRel,
+          loop_kind: f.loop_kind,
+          line: f.line,
+          col: f.col,
+        });
+      }
+      for (const l of runtime.lock_acquisitions) {
+        lock_acquisitions.push({
+          function: def.name,
+          file: b.fileRel,
+          method: l.method,
+          line: l.line,
+          col: l.col,
+          has_release_in_finally: l.has_release_in_finally,
+        });
+      }
+      for (const t of runtime.trigger_creates) {
+        trigger_creates.push({
+          function: def.name,
+          file: b.fileRel,
+          line: t.line,
+          col: t.col,
+          handler_name: t.handler_name,
+        });
+      }
+      if (runtime.has_delete_trigger) has_any_delete_trigger = true;
       const calls = extractCallSites(def.bodyNode);
       const seenOut = new Set<string>();
       for (const call of calls) {
@@ -385,6 +436,13 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     pending_library_calls,
     receiver_usage,
     api_call_chains,
+    runtime_signals: {
+      value_calls_in_loops,
+      fetches_in_loops,
+      lock_acquisitions,
+      trigger_creates,
+      has_any_delete_trigger,
+    } satisfies RuntimeSignals,
     manifest: manifest.manifest,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],

@@ -26,6 +26,7 @@ import { loadEvalDataset, runEval, renderEvalReportText } from './eval.js';
 import { buildMap, renderMapText } from './map.js';
 import { analyzeManifest, renderManifestText } from './manifest-analysis.js';
 import { validateApi, renderApiValidationText } from './validate-api.js';
+import { lintRuntime, renderLintRuntimeText } from './lint-runtime.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -290,6 +291,61 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       if (opts.format === 'text') {
         for (const r of reports) {
           process.stdout.write(renderApiValidationText(r) + '\n');
+        }
+      } else {
+        process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
+      }
+      if (verdict === 'BREAK') process.exit(3);
+      if (verdict === 'WARN') process.exit(4);
+      process.exit(0);
+    });
+
+  program
+    .command('lint-runtime')
+    .description(
+      "Lint heuristique GAS-aware (V3 §21.3) : quota.value_in_loop, " +
+        "urlfetch.in_loop, lock.no_finally, trigger.orphan. " +
+        "Sortie en WARN/INFO uniquement — jamais BREAK (le `break` reste " +
+        "réservé aux régressions structurelles).",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Cibler un seul projet d'un index workspace")
+    .option('--format <fmt>', 'json | text', 'json')
+    .action(async (opts: LintRuntimeCliOpts) => {
+      const idxPath = resolve(opts.indexPath);
+      if (!existsSync(idxPath)) {
+        process.stderr.write(
+          `gaslens lint-runtime: index introuvable à ${idxPath}. Lance 'gaslens scan'.\n`,
+        );
+        process.exit(2);
+      }
+      let raw: ProjectIndex | WorkspaceIndex;
+      try {
+        raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+          | ProjectIndex
+          | WorkspaceIndex;
+      } catch (err) {
+        process.stderr.write(
+          `gaslens lint-runtime: index illisible — ${(err as Error).message}.\n`,
+        );
+        process.exit(2);
+      }
+      const targets = pickManifestTargets(raw, opts.project);
+      if (targets.length === 0) {
+        process.stderr.write(
+          `gaslens lint-runtime: --project '${opts.project ?? ''}' introuvable.\n`,
+        );
+        process.exit(2);
+      }
+      const reports = targets.map((p) => lintRuntime(p));
+      const verdict = reports.some((r) => r.verdict === 'BREAK')
+        ? 'BREAK'
+        : reports.some((r) => r.verdict === 'WARN')
+          ? 'WARN'
+          : 'CLEAN';
+      if (opts.format === 'text') {
+        for (const r of reports) {
+          process.stdout.write(renderLintRuntimeText(r) + '\n');
         }
       } else {
         process.stdout.write(JSON.stringify({ verdict, projects: reports }, null, 2) + '\n');
@@ -960,6 +1016,12 @@ interface ManifestCliOpts {
 }
 
 interface ValidateApiCliOpts {
+  indexPath: string;
+  project?: string;
+  format: string;
+}
+
+interface LintRuntimeCliOpts {
   indexPath: string;
   project?: string;
   format: string;

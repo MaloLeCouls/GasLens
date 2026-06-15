@@ -22,7 +22,11 @@ export type ConsumerKind =
   | 'manifest.advanced_service'
   | 'manifest.scope'
   | 'manifest.urlfetch_whitelist'
-  | 'api.unknown_method';
+  | 'api.unknown_method'
+  | 'lint.quota_in_loop'
+  | 'lint.urlfetch_in_loop'
+  | 'lint.lock_no_finally'
+  | 'lint.trigger_orphan';
 
 export type Confidence = 'high' | 'medium' | 'low';
 

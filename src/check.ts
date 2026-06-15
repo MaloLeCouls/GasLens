@@ -2,6 +2,7 @@ import { scanProject } from './scanner.js';
 import { diffIndexes, type DiffOptions } from './diff.js';
 import { analyzeManifest } from './manifest-analysis.js';
 import { validateApi } from './validate-api.js';
+import { lintRuntime } from './lint-runtime.js';
 import {
   aggregateVerdict,
   summarize,
@@ -48,7 +49,8 @@ export async function runCheck(opts: CheckOptions): Promise<CheckResult> {
   const report = diffIndexes(opts.baseline, current, diffOpts);
   const threshold = opts.severity_threshold ?? 'warn';
   const withManifest = enrichWithManifestFindings(report, current, threshold);
-  const enriched = enrichWithApiFindings(withManifest, current, threshold);
+  const withApi = enrichWithApiFindings(withManifest, current, threshold);
+  const enriched = enrichWithLintRuntimeFindings(withApi, current, threshold);
   const fail_on = opts.fail_on ?? 'break';
   const exit_code = exitCodeFor(enriched.verdict, fail_on);
   return { report: enriched, exit_code };
@@ -96,6 +98,29 @@ export function enrichWithApiFindings(
   const api = validateApi(current);
   if (api.findings.length === 0) return report;
   const extra = api.findings.filter((f) => keepBySeverity(f, threshold));
+  if (extra.length === 0) return report;
+  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
+  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
+  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
+  const verdict = aggregateVerdict(breaks, warns);
+  return {
+    ...report,
+    breaks,
+    warns,
+    safe,
+    verdict,
+    summary: summarize(breaks, warns, report.coverage.resolved_pct),
+  };
+}
+
+export function enrichWithLintRuntimeFindings(
+  report: DiffReport,
+  current: ProjectIndex,
+  threshold: 'info' | 'warn' | 'break',
+): DiffReport {
+  const lint = lintRuntime(current);
+  if (lint.findings.length === 0) return report;
+  const extra = lint.findings.filter((f) => keepBySeverity(f, threshold));
   if (extra.length === 0) return report;
   const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
   const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
