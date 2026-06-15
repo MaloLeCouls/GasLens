@@ -5,10 +5,12 @@ import type {
   ApiCallChainRecord,
   CallerInfo,
   ClientHandlerRef,
+  ContractContribution,
   Coverage,
   CrossProjectEdge,
   Exposure,
   FunctionRecord,
+  HtmlFileContribution,
   HtmlWebappFileSignals,
   PendingLibraryCall,
   ProjectIndex,
@@ -106,12 +108,6 @@ interface HtmlFileBundle {
   scriptletDataReads: Set<string>;
   /** Notes coverage à émettre côté record si la fonction cible n'existe pas. */
   unresolved: UnresolvedCall[];
-}
-
-interface ContractContribution {
-  success_fields: FieldRead[];
-  failure_fields: FieldRead[];
-  unresolved_handlers: InferredContract['unresolved_handlers'];
 }
 
 export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
@@ -253,6 +249,9 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   //   - unresolved.
   const unresolved: UnresolvedCall[] = [];
   const pending_library_calls: PendingLibraryCall[] = [];
+  // Caches per-file pour le scan incrémental (V3 §21) :
+  const pending_library_calls_by_file: Record<string, PendingLibraryCall[]> = {};
+  const unresolved_calls_by_file: Record<string, UnresolvedCall[]> = {};
   const receiver_usage: ReceiverUsage[] = [];
   const api_call_chains: ApiCallChainRecord[] = [];
   const value_calls_in_loops: RuntimeSignalValueCallInLoop[] = [];
@@ -411,7 +410,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
               rec.coverage.external_boundaries.push(note);
             }
             // Mémoriser le call site pour la passe cross-project (scanWorkspace).
-            pending_library_calls.push({
+            const libCall: PendingLibraryCall = {
               library_prefix: resolution.receiver,
               method: call.final_name,
               caller_function: def.name,
@@ -419,16 +418,20 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
               caller_line: call.line,
               caller_arguments: call.arguments_text,
               return_used_as: returnUsedAs(call.node),
-            });
+            };
+            pending_library_calls.push(libCall);
+            (pending_library_calls_by_file[b.fileRel] ??= []).push(libCall);
             break;
           }
           case 'unresolved_bare': {
-            unresolved.push({
+            const u: UnresolvedCall = {
               file: b.fileRel,
               line: call.line,
               callee_text: call.callee_text,
               reason: 'identifier non résolu dans le namespace projet',
-            });
+            };
+            unresolved.push(u);
+            (unresolved_calls_by_file[b.fileRel] ??= []).push(u);
             rec.coverage.unresolved.push({
               what: `appel à '${call.callee_text}' non résolu`,
               where: `${b.fileRel}:${call.line}`,
@@ -447,7 +450,17 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   }
 
   // Pass 3 : HTML. Pour chaque exposure client_call / scriptlet détectée,
-  // retrouver le record correspondant et l'attacher.
+  // retrouver le record correspondant et l'attacher. On capture les
+  // contributions sous forme sérialisable (HtmlFileContribution) pour le
+  // scan incrémental — appliquées via applyHtmlContributions ensuite.
+  const html_contributions: HtmlFileContribution[] = htmlBundles.map((h) => ({
+    file: h.fileRel,
+    client_calls_by_target: mapToRecord(h.clientCalls),
+    scriptlet_calls_by_target: mapToRecord(h.scriptletCalls),
+    contract_contributions_by_target: mapToRecord(h.contractContributions),
+    scriptlet_data_reads: [...h.scriptletDataReads].sort(),
+    unresolved: [...h.unresolved],
+  }));
   for (const h of htmlBundles) {
     for (const [name, exposures] of h.clientCalls) {
       const rec = records.get(name);
@@ -544,6 +557,9 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       has_any_delete_trigger,
     } satisfies RuntimeSignals,
     html_webapp_signals,
+    html_contributions,
+    pending_library_calls_by_file,
+    unresolved_calls_by_file,
     manifest: manifest.manifest,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],
@@ -566,6 +582,96 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
 function sha1(s: string): string {
   return createHash('sha1').update(s).digest('hex');
+}
+
+function mapToRecord<V>(m: Map<string, V>): Record<string, V> {
+  const out: Record<string, V> = {};
+  for (const [k, v] of m) out[k] = v;
+  return out;
+}
+
+/**
+ * Applique une liste de HtmlFileContribution sur un map de records (in-place) :
+ *   - ajoute les exposures (client_call/scriptlet) aux records cibles ;
+ *   - merge les contract_contributions dans inferred_contract ;
+ *   - renvoie les unresolved cumulés (à ajouter au niveau projet).
+ *
+ * Utilisé à la fois par le full scan et par le chemin incrémental (où
+ * certaines contributions viennent du baseline et d'autres sont fraîches).
+ */
+export function applyHtmlContributions(
+  records: Map<string, FunctionRecord>,
+  contributions: HtmlFileContribution[],
+): UnresolvedCall[] {
+  const out: UnresolvedCall[] = [];
+  for (const c of contributions) {
+    for (const [name, exposures] of Object.entries(c.client_calls_by_target)) {
+      const rec = records.get(name);
+      if (!rec) {
+        out.push(
+          ...exposures.map((e) => ({
+            file: e.file,
+            line: e.line,
+            callee_text: `google.script.run.${name}`,
+            reason: `appel google.script.run.${name} — fonction serveur '${name}' introuvable dans le projet`,
+          })),
+        );
+        continue;
+      }
+      if (rec.definition.visibility === 'private') {
+        for (const e of exposures) {
+          if (
+            !(e.detail ?? '').includes(
+              "google.script.run ne peut PAS l'appeler",
+            )
+          ) {
+            e.detail =
+              (e.detail ? e.detail + ' ; ' : '') +
+              `⚠ fonction privée (suffixe _) — google.script.run ne peut PAS l'appeler à l'exécution`;
+          }
+        }
+      }
+      rec.exposures.push(...exposures);
+    }
+    for (const [name, exposures] of Object.entries(c.scriptlet_calls_by_target)) {
+      const rec = records.get(name);
+      if (!rec) continue;
+      rec.exposures.push(...exposures);
+    }
+    for (const [name, contrib] of Object.entries(c.contract_contributions_by_target)) {
+      const rec = records.get(name);
+      if (!rec) continue;
+      mergeIntoContract(rec, contrib);
+    }
+    out.push(...c.unresolved);
+  }
+  return out;
+}
+
+/**
+ * Cross-link des template_bindings côté serveur avec les `data.X` lus
+ * côté scriptlets. Utilisé en full scan ET dans le chemin incrémental.
+ */
+export function linkTemplateBindings(
+  records: Map<string, FunctionRecord>,
+  contributions: HtmlFileContribution[],
+): void {
+  const dataReadsByFile = new Map<string, Set<string>>();
+  for (const c of contributions) {
+    dataReadsByFile.set(c.file, new Set(c.scriptlet_data_reads));
+  }
+  for (const rec of records.values()) {
+    for (const tb of rec.patterns.template_bindings) {
+      const reads = dataReadsByFile.get(tb.template_file);
+      if (!reads) continue;
+      tb.data_fields_read_in_scriptlets = [...reads].sort();
+      const setFields = new Set(tb.data_fields_set);
+      tb.unread_data_fields = tb.data_fields_set.filter((f) => !reads.has(f));
+      tb.read_but_not_set = [...reads]
+        .filter((f) => !setFields.has(f))
+        .sort();
+    }
+  }
 }
 
 /**

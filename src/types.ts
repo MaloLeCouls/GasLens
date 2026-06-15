@@ -120,6 +120,38 @@ export interface OutboundCall {
   return_used_as: string | null;
 }
 
+/**
+ * Contribution d'un fichier HTML au contrat inféré d'une fonction serveur
+ * (champs lus par les handlers success/failure côté client).
+ */
+export interface ContractContribution {
+  success_fields: FieldRead[];
+  failure_fields: FieldRead[];
+  unresolved_handlers: InferredContract['unresolved_handlers'];
+}
+
+/**
+ * Snapshot sérialisable de la contribution d'un fichier HTML au reste du
+ * projet — substrat du scan incrémental par fichier (V3 §21).
+ *
+ * Pour chaque fonction serveur cible, on retient :
+ *  - les exposures émises depuis les `google.script.run.fn(...)` (client_call) ;
+ *  - les exposures émises depuis les scriptlets `<?= fn() ?>` ;
+ *  - la contribution au contrat (champs lus par success/failure handlers).
+ * Plus, au niveau du fichier :
+ *  - les champs `data.X` lus dans les scriptlets (cross-link avec
+ *    `template_bindings` côté serveur) ;
+ *  - les call sites non résolus (handlers introuvables, etc.).
+ */
+export interface HtmlFileContribution {
+  file: string;
+  client_calls_by_target: Record<string, Exposure[]>;
+  scriptlet_calls_by_target: Record<string, Exposure[]>;
+  contract_contributions_by_target: Record<string, ContractContribution>;
+  scriptlet_data_reads: string[];
+  unresolved: UnresolvedCall[];
+}
+
 export interface PendingLibraryCall {
   library_prefix: string;
   method: string;
@@ -440,6 +472,15 @@ export interface ProjectIndex {
   runtime_signals: RuntimeSignals;
   /** Signaux côté HTML pour lint-webapp (V3 §21.4). */
   html_webapp_signals: HtmlWebappFileSignals[];
+  /**
+   * Contributions des fichiers HTML aux records — substrat du scan
+   * incrémental par fichier (réappliquées sur les records à chaque scan).
+   */
+  html_contributions?: HtmlFileContribution[];
+  /** Appels `Lib.fn()` groupés par fichier source — substrat incrémental. */
+  pending_library_calls_by_file?: Record<string, PendingLibraryCall[]>;
+  /** Appels non résolus groupés par fichier source — substrat incrémental. */
+  unresolved_calls_by_file?: Record<string, UnresolvedCall[]>;
   /** Manifeste parsé — source pour `gaslens manifest` (V3 §21.1). */
   manifest: ProjectManifest;
   /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */
