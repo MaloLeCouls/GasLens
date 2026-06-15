@@ -52,6 +52,7 @@ src/
     return-analysis.ts         shape de retour, nullabilité, sérialisabilité
     uncertainty.ts             alimente coverage (dispatch dynamique, etc.)
   inspect.ts / impact.ts / diff.ts / check.ts / hook.ts    les commandes
+  map.ts                       table des matières compacte (V3 §21.5) — projection seule de l'index
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
   eval.ts                      rejoue eval/tasks/*.json
   init.ts                      recettes CLAUDE.md / settings.json (V2 §16)
@@ -85,7 +86,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~165 tests)
+npm test             # vitest run  (doit rester vert ; ~179 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -107,11 +108,10 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
+Implémenté : `scan`, `map`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
 
 À construire (détail + intérêt dans V3) :
-- **`map`** (V3 §21.5) — aperçu compact anti-orientation. Meilleur ROI ; données déjà dans l'index.
-- **`manifest`** (V3 §21.1) — étendre le STUB `manifest.ts` : scopes/services avancés/libs/`urlFetchWhitelist` *utilisés vs déclarés*. Nouveau `consumer_kind`.
+- **`manifest`** (V3 §21.1) — étendre le STUB `manifest.ts` : scopes/services avancés/libs/`urlFetchWhitelist` *utilisés vs déclarés*. Nouveau `consumer_kind`. Meilleur ROI restant.
 - **`validate-api`** (V3 §21.2) — passer `gas-services.ts` du niveau *nom* au niveau *méthode* (via `@types/google-apps-script`) : attrape les méthodes GAS hallucinées en statique.
 - **`lint-webapp`** / **`lint-runtime`** (V3 §21.4/§21.3) — `warn`/`info` (mixed content, target, forms ; quota/6 min/lock/trigger orphelin).
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).

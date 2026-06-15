@@ -23,6 +23,7 @@ import {
 import { emitDts } from './emit-dts.js';
 import { emitContractTests } from './emit-contract-tests.js';
 import { loadEvalDataset, runEval, renderEvalReportText } from './eval.js';
+import { buildMap, renderMapText } from './map.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -115,6 +116,64 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.stderr.write(`gaslens scan: erreur — ${e.message ?? err}\n`);
         }
         process.exit(2);
+      }
+    });
+
+  program
+    .command('map')
+    .description(
+      "Table des matières ultra-compacte d'un projet ou workspace (V3 §21.5) : " +
+        'entry points web, triggers, fonctions exposées au client, librairies ' +
+        "consommées/exposées, templates scriptlet. Pensé pour l'amorçage de session.",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Cibler un seul projet d'un index workspace")
+    .option('--format <fmt>', 'json | text', 'json')
+    .action(async (opts: MapCliOpts) => {
+      const idxPath = resolve(opts.indexPath);
+      if (!existsSync(idxPath)) {
+        process.stderr.write(
+          `gaslens map: index introuvable à ${idxPath}. ` +
+            `Lance d'abord 'gaslens scan <chemin>' pour le construire, ` +
+            `ou passe --index-path vers un index existant.\n`,
+        );
+        process.exit(2);
+      }
+      let raw: ProjectIndex | WorkspaceIndex;
+      try {
+        raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+          | ProjectIndex
+          | WorkspaceIndex;
+      } catch (err) {
+        process.stderr.write(
+          `gaslens map: index illisible (${(err as Error).message}). ` +
+            `Re-génère-le avec 'gaslens scan'.\n`,
+        );
+        process.exit(2);
+      }
+      if (opts.project) {
+        if (raw.kind !== 'workspace') {
+          process.stderr.write(
+            `gaslens map: --project '${opts.project}' précisé mais l'index n'est pas un workspace.\n`,
+          );
+          process.exit(2);
+        }
+        const target = raw.projects.find((p) => p.project === opts.project);
+        if (!target) {
+          process.stderr.write(
+            `gaslens map: --project '${opts.project}' introuvable. Projets : ` +
+              raw.projects.map((p) => p.project).join(', ') +
+              '\n',
+          );
+          process.exit(2);
+        }
+        raw = target;
+      }
+      const report = buildMap(raw);
+      if (opts.format === 'text') {
+        process.stdout.write(renderMapText(report) + '\n');
+      } else {
+        process.stdout.write(JSON.stringify(report, null, 2) + '\n');
       }
     });
 
@@ -760,6 +819,12 @@ interface InspectCliOpts {
   maxCallers: string;
   coverageDetail: string;
   fuzzy: boolean;
+  indexPath: string;
+  project?: string;
+  format: string;
+}
+
+interface MapCliOpts {
   indexPath: string;
   project?: string;
   format: string;
