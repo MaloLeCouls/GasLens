@@ -50,15 +50,18 @@ src/
     gas-patterns.ts (~347)     tableaux 2D getValues(), destructuration, template.data, clés Properties
     handler-shapes.ts          shape lue par les successHandler
     return-analysis.ts         shape de retour, nullabilité, sérialisabilité
+    api-chains.ts              chaînes d'appels Service.m1().m2()… (alimente validate-api)
     uncertainty.ts             alimente coverage (dispatch dynamique, etc.)
   inspect.ts / impact.ts / diff.ts / check.ts / hook.ts    les commandes
   map.ts                       table des matières compacte (V3 §21.5) — projection seule de l'index
   manifest.ts                  parse complet d'appsscript.json (scopes, libs, advanced services, whitelist)
   manifest-analysis.ts         croise code ↔ manifeste (V3 §21.1) : library.undeclared/.unused, advanced_service.missing/.unused
+  validate-api.ts              valide les chaînes d'appels GAS contre gas-api.ts (V3 §21.2) : api.unknown_method + suggestions fuzzy
+  gas-api.ts                   registre curé Service→Method→ReturnType pour ~15 services natifs (source: doc + @types/google-apps-script)
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
-  eval.ts                      rejoue eval/tasks/*.json (inclut désormais les findings manifeste via enrichWithManifestFindings)
+  eval.ts                      rejoue eval/tasks/*.json (inclut findings manifeste + validate-api via enrichWith*Findings)
   init.ts                      recettes CLAUDE.md / settings.json (V2 §16)
-  gas-services.ts              ⚠ liste de NOMS de services natifs (pas de validation par méthode)
+  gas-services.ts              liste de NOMS de services natifs (utilisée par le scanner pour classifier les receivers ; validation par méthode = gas-api.ts)
 eval/tasks/*.json              jeu de tâches de référence (édition → verdict attendu)
 tests/                         vitest ; fixtures/sample-project + fixtures/sample-workspace
 ```
@@ -87,7 +90,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~190 tests)
+npm test             # vitest run  (doit rester vert ; ~199 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -109,12 +112,13 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `eval`, `init`.
 
 `manifest` (V3 §21.1) — Phase 1 livrée : `library.undeclared` (BREAK), `library.unused` (INFO), `advanced_service.missing` (BREAK), `advanced_service.unused` (INFO). Câblé dans `check` via `enrichWithManifestFindings`. **À étendre** : `scope.missing/.unused` (mapping service→scope), `urlfetch.not_whitelisted` (URL littérales vs `urlFetchWhitelist`).
 
+`validate-api` (V3 §21.2) — Phase 1 livrée : `api.unknown_method` (BREAK) + suggestions fuzzy. Registre curé dans `gas-api.ts` (~15 services, ~400 méthodes). Honnête : s'arrête sur les types `unknown` ou tableaux (pas de faux positif). Câblé dans `check` via `enrichWithApiFindings`. **À étendre** : `api.wrong_arity` (registre stocke déjà l'arity grossière côté chaîne, manque côté registre), `api.deprecated` (méthodes Rhino-only sous V8).
+
 À construire (détail + intérêt dans V3) :
-- **`validate-api`** (V3 §21.2) — passer `gas-services.ts` du niveau *nom* au niveau *méthode* (via `@types/google-apps-script`) : attrape les méthodes GAS hallucinées en statique.
 - **`lint-webapp`** / **`lint-runtime`** (V3 §21.4/§21.3) — `warn`/`info` (mixed content, target, forms ; quota/6 min/lock/trigger orphelin).
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
 - `emit-contract-tests --runner gas-fakes` (V3 §23) ; wrapper **MCP** + **Skill** (V3 §24).

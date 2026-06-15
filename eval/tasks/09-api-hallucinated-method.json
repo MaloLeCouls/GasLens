@@ -1,0 +1,23 @@
+{
+  "name": "api-hallucinated-method",
+  "description": "Un agent invente une méthode 'getValuesAll' sur Range (proche de getValues). validate-api doit la flagger comme BREAK avec suggestion (V3 §21.2).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "utils.gs",
+      "before_contains": "const rows = sheet.getDataRange().getValues();",
+      "after": "const rows = SpreadsheetApp.getActive().getActiveSheet().getRange('A1').getValuesAll();"
+    }
+  ],
+  "expected": {
+    "verdict": "BREAK",
+    "breaks_min": 1,
+    "breaks_must_include": [
+      {
+        "file": "utils.gs",
+        "reason_substring": "getValuesAll",
+        "consumer_kind": "api.unknown_method"
+      }
+    ]
+  }
+}

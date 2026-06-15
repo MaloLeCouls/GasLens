@@ -301,6 +301,23 @@ export interface ReceiverUsage {
   line: number;
 }
 
+export interface ApiChainMethod {
+  name: string;
+  arity: number;
+  line: number;
+  col: number;
+}
+
+export interface ApiCallChainRecord {
+  root: string;
+  methods: ApiChainMethod[];
+  function: string;
+  file: string;
+  start_line: number;
+  /** Vrai si la chaîne a un préfixe non résoluble (ex: namespace `Drive.Files`). */
+  truncated_at_root: boolean;
+}
+
 export interface ProjectIndex {
   /** Discriminant pour les outils consommateurs (`workspace` ailleurs). */
   kind?: 'project';
@@ -315,6 +332,8 @@ export interface ProjectIndex {
   pending_library_calls: PendingLibraryCall[];
   /** Usage agrégé des receivers (services natifs, libs déclarées, et inconnus). */
   receiver_usage: ReceiverUsage[];
+  /** Chaînes d'appels (Service.m1().m2()) à valider contre le registre GAS (V3 §21.2). */
+  api_call_chains: ApiCallChainRecord[];
   /** Manifeste parsé — source pour `gaslens manifest` (V3 §21.1). */
   manifest: ProjectManifest;
   /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */

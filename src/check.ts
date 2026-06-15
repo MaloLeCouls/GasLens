@@ -1,6 +1,7 @@
 import { scanProject } from './scanner.js';
 import { diffIndexes, type DiffOptions } from './diff.js';
 import { analyzeManifest } from './manifest-analysis.js';
+import { validateApi } from './validate-api.js';
 import {
   aggregateVerdict,
   summarize,
@@ -46,7 +47,8 @@ export async function runCheck(opts: CheckOptions): Promise<CheckResult> {
   };
   const report = diffIndexes(opts.baseline, current, diffOpts);
   const threshold = opts.severity_threshold ?? 'warn';
-  const enriched = enrichWithManifestFindings(report, current, threshold);
+  const withManifest = enrichWithManifestFindings(report, current, threshold);
+  const enriched = enrichWithApiFindings(withManifest, current, threshold);
   const fail_on = opts.fail_on ?? 'break';
   const exit_code = exitCodeFor(enriched.verdict, fail_on);
   return { report: enriched, exit_code };
@@ -84,6 +86,29 @@ function keepBySeverity(
   if (threshold === 'break') return f.severity === 'break';
   if (threshold === 'warn') return f.severity === 'break' || f.severity === 'warn';
   return true;
+}
+
+export function enrichWithApiFindings(
+  report: DiffReport,
+  current: ProjectIndex,
+  threshold: 'info' | 'warn' | 'break',
+): DiffReport {
+  const api = validateApi(current);
+  if (api.findings.length === 0) return report;
+  const extra = api.findings.filter((f) => keepBySeverity(f, threshold));
+  if (extra.length === 0) return report;
+  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
+  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
+  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
+  const verdict = aggregateVerdict(breaks, warns);
+  return {
+    ...report,
+    breaks,
+    warns,
+    safe,
+    verdict,
+    summary: summarize(breaks, warns, report.coverage.resolved_pct),
+  };
 }
 
 export function exitCodeFor(verdict: Verdict, fail_on: 'break' | 'warn' | 'never'): number {

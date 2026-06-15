@@ -19,7 +19,8 @@ export type ConsumerKind =
   | 'array2d_consumer'
   | 'template_scriptlet_reader'
   | 'manifest.library'
-  | 'manifest.advanced_service';
+  | 'manifest.advanced_service'
+  | 'api.unknown_method';
 
 export type Confidence = 'high' | 'medium' | 'low';
 

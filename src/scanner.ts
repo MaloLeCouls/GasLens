@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type {
+  ApiCallChainRecord,
   CallerInfo,
   ClientHandlerRef,
   Coverage,
@@ -17,6 +18,7 @@ import type {
 import { parseSource } from './parser.js';
 import { extractDefinitions, type RawDefinition } from './extract/definitions.js';
 import { extractCallSites, type RawCallSite } from './extract/calls.js';
+import { extractApiCallChains } from './extract/api-chains.js';
 import {
   exposuresFromName,
   installableTriggersFromCalls,
@@ -155,6 +157,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   const unresolved: UnresolvedCall[] = [];
   const pending_library_calls: PendingLibraryCall[] = [];
   const receiver_usage: ReceiverUsage[] = [];
+  const api_call_chains: ApiCallChainRecord[] = [];
   for (const b of bundles) {
     // a) Expositions installable_trigger : sur *tout* le fichier, peu importe le caller.
     const trigMap = installableTriggersFromCalls(b.topLevelCalls, b.fileRel);
@@ -191,6 +194,16 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
           where: `${rec.definition.file}:${rec.definition.line}`,
           reason: 'la shape de retour ne peut pas être fermée statiquement',
           suggestion: 'préférer des clés littérales ou documenter la shape attendue côté consommateurs',
+        });
+      }
+      for (const chain of extractApiCallChains(def.bodyNode)) {
+        api_call_chains.push({
+          root: chain.root,
+          methods: chain.methods,
+          function: def.name,
+          file: b.fileRel,
+          start_line: chain.start_line,
+          truncated_at_root: chain.truncated_at_root,
         });
       }
       const calls = extractCallSites(def.bodyNode);
@@ -371,6 +384,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     property_keys,
     pending_library_calls,
     receiver_usage,
+    api_call_chains,
     manifest: manifest.manifest,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],
