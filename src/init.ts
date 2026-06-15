@@ -115,7 +115,7 @@ Quand le hook est câblé, \`gaslens check\` tourne automatiquement après chaqu
 
 | Commande | Rôle |
 |---|---|
-| \`scan <root>\` | Construit l'index (à relancer après un batch d'édits) |
+| \`scan <root>\` | Construit l'index. \`--incremental [baseline]\` : fast-path si rien n'a changé (~10× plus rapide) |
 | \`map\` | Aperçu compact projet/workspace |
 | \`inspect <fn>\` | Tout sur une fonction (signature, callers, contrat) |
 | \`impact <fn> --change\` | Régressions potentielles d'une mutation décrite |

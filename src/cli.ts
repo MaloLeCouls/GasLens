@@ -1050,7 +1050,7 @@ interface CommandOverviewEntry {
 }
 
 const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
-  { name: 'scan <root>', tldr: "construit l'index (.gs/.html/appsscript.json)", reads_index: false, emits_findings: false },
+  { name: 'scan <root>', tldr: "construit l'index ; --incremental [baseline] pour le fast-path", reads_index: false, emits_findings: false },
   { name: 'map', tldr: 'aperçu compact projet/workspace (~300 tokens)', reads_index: true, emits_findings: false },
   { name: 'inspect <fn>', tldr: 'signature/callers/contrat/coverage par fonction', reads_index: true, emits_findings: false },
   { name: 'impact <fn> --change', tldr: 'régressions potentielles d\'une mutation décrite', reads_index: true, emits_findings: true },
