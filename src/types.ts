@@ -107,6 +107,19 @@ export interface CallerInfo {
   caller_project?: string;
 }
 
+/**
+ * Appel sortant résolu (interne au projet) — la « vue caller » de CallerInfo.
+ * Stocké sur la fonction qui appelle, fournit tout ce qu'il faut pour
+ * reconstruire called_by côté callee sans re-parser (scan incrémental V3).
+ */
+export interface OutboundCall {
+  callee_name: string;
+  file: string;
+  line: number;
+  arguments_text: string[];
+  return_used_as: string | null;
+}
+
 export interface PendingLibraryCall {
   library_prefix: string;
   method: string;
@@ -239,6 +252,11 @@ export interface FunctionRecord {
   definition: FunctionDefinition;
   exposures: Exposure[];
   calls_out: string[];
+  /**
+   * Appels sortants détaillés (résolus internes au projet). Permet de
+   * reconstruire `called_by` sans re-parser — substrat du scan incrémental.
+   */
+  outbound_calls: OutboundCall[];
   called_by: CallerInfo[];
   inferred_contract: InferredContract | null;
   patterns: FunctionPatterns;

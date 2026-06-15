@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { scanProject, scanWorkspace } from './scanner.js';
 import {
   inspect,
@@ -66,11 +66,46 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       'json',
     )
     .option('--bench', "Imprime le breakdown des timings sur stderr", false)
+    .option(
+      '--incremental [baseline]',
+      "Mode incrémental — si aucune source n'a changé depuis le baseline, " +
+        'retourne le baseline. Défaut : <root>/.gaslens/baseline.json',
+    )
     .action(async (path: string, opts: ScanOpts) => {
       try {
         const root = resolve(path);
+        let incrementalBaseline: ProjectIndex | WorkspaceIndex | undefined;
+        if (opts.incremental !== undefined) {
+          const baselinePath = resolve(
+            typeof opts.incremental === 'string'
+              ? opts.incremental
+              : join(root, '.gaslens', 'baseline.json'),
+          );
+          if (existsSync(baselinePath)) {
+            try {
+              incrementalBaseline = JSON.parse(
+                await readFile(baselinePath, 'utf8'),
+              ) as ProjectIndex | WorkspaceIndex;
+            } catch (err) {
+              process.stderr.write(
+                `gaslens scan: --incremental baseline illisible (${(err as Error).message}). Scan complet.\n`,
+              );
+            }
+          } else if (typeof opts.incremental === 'string') {
+            process.stderr.write(
+              `gaslens scan: --incremental baseline introuvable à ${baselinePath}. Scan complet.\n`,
+            );
+          }
+        }
         const idx = await scanWorkspace({
           root,
+          incrementalBaseline,
+          onIncrementalHit: opts.bench
+            ? (info) =>
+                process.stderr.write(
+                  `gaslens scan: incremental fast-path (${info.reason}, ${info.files_count} files unchanged)\n`,
+                )
+            : undefined,
           onBench: opts.bench
             ? (b) => {
                 process.stderr.write(
@@ -1161,6 +1196,8 @@ interface ScanOpts {
   stdout?: boolean;
   format: 'json' | 'ndjson';
   bench: boolean;
+  /** undefined si --incremental absent ; true si présent sans path ; string si path donné. */
+  incremental?: boolean | string;
 }
 
 interface InspectCliOpts {

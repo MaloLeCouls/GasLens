@@ -97,7 +97,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~247 tests)
+npm test             # vitest run  (doit rester vert ; ~252 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -128,10 +128,12 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - Détection d'index stale (`stale-check.ts`) — warning stderr automatique quand une source est plus récente que l'index, avec la commande exacte de re-scan.
 - **Serveur MCP** (`bin/gaslens-mcp.js`) — expose 4 outils consolidés (`gaslens_map`, `gaslens_inspect`, `gaslens_impact`, `gaslens_check`) sur stdio. Pour Claude Code, ajouter dans `.mcp.json` : `{"mcpServers":{"gaslens":{"command":"node","args":["./bin/gaslens-mcp.js"]}}}` (ou `npx gaslens-mcp` après publication).
 
-**Fondations perf (V3 §21, prep incremental scan)** :
-- `ProjectIndex.file_hashes` : sha1 de chaque source (.gs/.html/appsscript.json) stockée dans l'index. Permet à un consommateur (ou à l'incremental scan futur) de détecter sans I/O quels fichiers ont changé.
+**Perf (fondations + fast-path incrémental)** :
+- `ProjectIndex.file_hashes` : sha1 de chaque source (.gs/.html/appsscript.json) stockée dans l'index.
 - `ProjectIndex.scan_duration_ms` : timing total du scan.
-- `gaslens scan --bench` : breakdown des phases sur stderr (read / parse+extract / rest). Mesuré sur sample-project : 39 ms total (4 read + 18 parse+extract + 17 rest).
+- `gaslens scan --bench` : breakdown des phases sur stderr (read / parse+extract / rest). Sample-project : 40 ms total (1 read + 21 parse+extract + 18 rest).
+- **Fast-path incrémental** (`gaslens scan --incremental [baseline]`) : si aucune source n'a une mtime > baseline.scanned_at ET que l'ensemble des fichiers est identique → retour direct du baseline. **×13 sur le sample-project (40 → 3 ms).** Câblé automatiquement dans le hook PostToolUse (réutilise `.gaslens/baseline.json`).
+- `FunctionRecord.outbound_calls` : substrat sérialisable pour le **vrai** incrémental par fichier. `rebuildCalledByFromOutboundCalls(records)` reconstruit `called_by` sans re-parser.
 
 `manifest` (V3 §21.1) — Phases 1 + 2 livrées : `library.undeclared/.unused`, `advanced_service.missing/.unused` (phase 1, confidence high), `scope.missing/.unused` (WARN/INFO, confidence medium, **silencieux quand `oauthScopes` n'est pas explicite** car l'auto-détection Google joue), `urlfetch.not_whitelisted` (WARN, **silencieux quand `urlFetchWhitelist` est absent**, URLs littérales seulement). Câblé dans `check` via `enrichWithManifestFindings`. Table service→scope dans `scopes.ts`. **Restent** : `scope.over_broad` (info, prudent), gestion de `@OnlyCurrentDoc`.
 
@@ -142,9 +144,10 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 `lint-webapp` (V3 §21.4) — Phase 1 livrée (WARN, confidence high/medium) : `webapp.mixed_content` (http:// dans tags script/link/img/iframe/source/video/audio + fetch/XHR/img.src côté JS client), `webapp.link_target` (`<a href>` de navigation sans target=, silencieux si `<base target="_top">` global), `webapp.form_submit` (`<form>` avec input/button submit sans `preventDefault`/`return false`). Câblé dans `check` via `enrichWithLintWebappFindings`. **Restent** : `webapp.run_out_of_context` (vague pour V1).
 
 À construire (détail + intérêt dans V3) :
-- **Scan incrémental complet** — réutiliser `ProjectIndex.file_hashes` : pour les fichiers dont le hash matche le baseline, sauter le parse + extract. Vrai gain perf sur gros repos (×5-10 sur le hook). Demande un refactor du scanner pour séparer per-file extraction vs cross-file resolution. Fondations livrées, refactor à faire.
+- **Scan incrémental complet par fichier** — pour les fichiers individuellement inchangés, sauter le parse + extract et réutiliser leurs `FunctionRecord` cachés. Substrat livré (`outbound_calls`, `rebuildCalledByFromOutboundCalls`, `file_hashes`) ; reste à factoriser les contributions HTML/library en forme sérialisable par fichier, puis brancher le merge. Gain attendu : ×3-5 sur le hook quand un seul fichier change.
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
+- Étendre `GAS_API_DEPRECATED` au fil des observations terrain.
 
 ---
 

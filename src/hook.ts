@@ -76,7 +76,13 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     };
   }
 
-  const current = await scanProject({ root: projectRoot });
+  // Fast-path incrémental : si le hook tourne mais que rien n'a réellement
+  // changé depuis le baseline (édit no-op, ou édit sur un fichier non-source),
+  // on évite le scan complet.
+  const current = await scanProject({
+    root: projectRoot,
+    incrementalBaseline: baseline,
+  });
   const report = diffIndexes(baseline, current, {
     baselineLabel: baselinePath,
     currentLabel: 'working-tree',

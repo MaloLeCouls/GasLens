@@ -65,6 +65,19 @@ export interface ScanOptions {
   root: string;
   /** Si fourni, appelé avec un breakdown des timings à la fin du scan. */
   onBench?: (bench: ScanBench) => void;
+  /**
+   * Si fourni, active le mode incrémental : si aucune source n'a une mtime
+   * postérieure à `baseline.scanned_at` (et que l'ensemble des fichiers est
+   * identique), renvoie un clone du baseline avec scanned_at mis à jour.
+   * Sinon → scan complet (V0.1). Le vrai incrémental par fichier viendra
+   * dans une itération suivante.
+   */
+  incrementalBaseline?: ProjectIndex;
+  /** Callback optionnel : si le fast-path incrémental a été pris. */
+  onIncrementalHit?: (info: {
+    reason: 'no_change_since_baseline';
+    files_count: number;
+  }) => void;
 }
 
 export interface ScanBench {
@@ -107,6 +120,43 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   const libraryPrefixes = new Set(manifest.libraryPrefixes);
 
   const { gsFiles, htmlFiles } = await collectSourceFiles(opts.root);
+
+  // ─── Fast-path incrémental (V0.1) ─────────────────────────────────────
+  // Si on a un baseline et que rien n'a changé depuis, renvoie le baseline.
+  // V0.1 critère : ensemble de fichiers identique + toutes mtimes ≤ scanned_at.
+  if (opts.incrementalBaseline) {
+    const fast = await tryIncrementalFastPath(
+      opts.root,
+      gsFiles,
+      htmlFiles,
+      opts.incrementalBaseline,
+    );
+    if (fast) {
+      const total = Date.now() - t0;
+      const result: ProjectIndex = {
+        ...opts.incrementalBaseline,
+        scanned_at: new Date().toISOString(),
+        scan_duration_ms: total,
+      };
+      if (opts.onIncrementalHit) {
+        opts.onIncrementalHit({
+          reason: 'no_change_since_baseline',
+          files_count: gsFiles.length + htmlFiles.length,
+        });
+      }
+      if (opts.onBench) {
+        opts.onBench({
+          total_ms: total,
+          read_files_ms: 0,
+          parse_and_extract_ms: 0,
+          rest_ms: total,
+          files_count: gsFiles.length + htmlFiles.length,
+          functions_count: result.functions.length,
+        });
+      }
+      return result;
+    }
+  }
   const file_hashes: Record<string, string> = {};
   const manifestPath = join(opts.root, 'appsscript.json');
   // Hash du manifeste (utile pour détecter les changements de scopes/libs).
@@ -180,6 +230,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
           def.definition.line,
         ),
         calls_out: [],
+        outbound_calls: [],
         called_by: [],
         inferred_contract: null,
         patterns: {
@@ -320,14 +371,23 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
               rec.calls_out.push(target.name);
               seenOut.add(target.name);
             }
+            const returnUse = returnUsedAs(call.node);
             const caller: CallerInfo = {
               file: b.fileRel,
               line: call.line,
               caller: def.name,
               arguments_text: call.arguments_text,
-              return_used_as: returnUsedAs(call.node),
+              return_used_as: returnUse,
             };
             target.called_by.push(caller);
+            // Substrat scan incrémental : on enregistre aussi côté caller.
+            rec.outbound_calls.push({
+              callee_name: target.name,
+              file: b.fileRel,
+              line: call.line,
+              arguments_text: call.arguments_text,
+              return_used_as: returnUse,
+            });
             break;
           }
           case 'external_gas_service': {
@@ -508,6 +568,96 @@ function sha1(s: string): string {
   return createHash('sha1').update(s).digest('hex');
 }
 
+/**
+ * Critère du fast-path incrémental v0.1 : on retourne le baseline
+ * (mis à jour) si et seulement si l'ensemble des fichiers est IDENTIQUE
+ * et qu'aucun n'a été modifié depuis `baseline.scanned_at`.
+ *
+ * Stratégie volontairement conservatrice : faux négatif possible sur un
+ * `touch` (mtime mise à jour, contenu identique) — on tombera dans le
+ * full scan, qui reste correct. Aucun faux positif (correctness > perf).
+ */
+async function tryIncrementalFastPath(
+  root: string,
+  gsAbs: string[],
+  htmlAbs: string[],
+  baseline: ProjectIndex,
+): Promise<boolean> {
+  // L'ensemble des fichiers DOIT être identique.
+  const currentRel = new Set<string>([
+    ...gsAbs.map((p) => toPosix(relative(root, p))),
+    ...htmlAbs.map((p) => toPosix(relative(root, p))),
+  ]);
+  // Le manifeste est tracké dans baseline.file_hashes mais pas dans
+  // gsFiles/htmlFiles ; on l'ajoute manuellement.
+  const manifestPath = join(root, 'appsscript.json');
+  let manifestExists = false;
+  try {
+    await stat(manifestPath);
+    manifestExists = true;
+    currentRel.add('appsscript.json');
+  } catch {
+    // pas de manifeste
+  }
+  const baselineFiles = new Set(Object.keys(baseline.file_hashes ?? {}));
+  if (
+    baselineFiles.size !== currentRel.size ||
+    [...currentRel].some((f) => !baselineFiles.has(f))
+  ) {
+    return false;
+  }
+  const baselineMs = Date.parse(baseline.scanned_at);
+  if (Number.isNaN(baselineMs)) return false;
+
+  // Toutes les mtimes doivent être ≤ baselineMs.
+  const filesAbs = [
+    ...gsAbs,
+    ...htmlAbs,
+    ...(manifestExists ? [manifestPath] : []),
+  ];
+  for (const abs of filesAbs) {
+    try {
+      const s = await stat(abs);
+      if (s.mtimeMs > baselineMs) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Reconstruit `called_by` sur chaque record à partir des `outbound_calls`
+ * des autres records. Utilisé par le scan incrémental après avoir mergé
+ * les records (certains cachés du baseline, certains fraîchement extraits).
+ *
+ * Ne touche PAS les contributions cross-project (`exposure type=library`) —
+ * celles-ci sont rejouées séparément dans `scanWorkspace`.
+ */
+export function rebuildCalledByFromOutboundCalls(
+  records: Map<string, FunctionRecord>,
+): void {
+  // 1. Reset called_by sur tous les records (on garde uniquement les entrées
+  //    cross-project, qui n'ont pas de outbound_call source dans CE projet).
+  for (const rec of records.values()) {
+    rec.called_by = rec.called_by.filter((c) => c.caller_project !== undefined);
+  }
+  // 2. Replay des outbound_calls.
+  for (const caller of records.values()) {
+    for (const out of caller.outbound_calls) {
+      const target = records.get(out.callee_name);
+      if (!target) continue;
+      target.called_by.push({
+        file: out.file,
+        line: out.line,
+        caller: caller.name,
+        arguments_text: out.arguments_text,
+        return_used_as: out.return_used_as,
+      });
+    }
+  }
+}
+
 function buildCoverageSummary(
   records: Map<string, FunctionRecord>,
 ): import('./types.js').ProjectCoverageSummary {
@@ -576,19 +726,51 @@ function classifyUnresolved(what: string): string {
 export async function scanWorkspace(opts: {
   root: string;
   onBench?: (bench: ScanBench) => void;
+  /** Baseline (ProjectIndex single-project ou WorkspaceIndex). */
+  incrementalBaseline?: ProjectIndex | WorkspaceIndex;
+  onIncrementalHit?: (info: {
+    reason: 'no_change_since_baseline';
+    files_count: number;
+  }) => void;
 }): Promise<WorkspaceIndex | ProjectIndex> {
   const projectRoots = await findProjectRoots(opts.root);
+  // Cherche le baseline ProjectIndex pour un projet donné (par chemin/root).
+  const pickProjectBaseline = (root: string): ProjectIndex | undefined => {
+    const b = opts.incrementalBaseline;
+    if (!b) return undefined;
+    if (b.kind !== 'workspace') {
+      return b.root === root ? b : undefined;
+    }
+    return b.projects.find((p) => p.root === root);
+  };
   if (projectRoots.length === 0) {
     // pas de manifeste : on traite quand même `root` comme un projet implicite.
-    return scanProject({ root: opts.root, onBench: opts.onBench });
+    return scanProject({
+      root: opts.root,
+      onBench: opts.onBench,
+      incrementalBaseline: pickProjectBaseline(opts.root),
+      onIncrementalHit: opts.onIncrementalHit,
+    });
   }
   if (projectRoots.length === 1) {
-    return scanProject({ root: projectRoots[0]!, onBench: opts.onBench });
+    return scanProject({
+      root: projectRoots[0]!,
+      onBench: opts.onBench,
+      incrementalBaseline: pickProjectBaseline(projectRoots[0]!),
+      onIncrementalHit: opts.onIncrementalHit,
+    });
   }
 
   const projects: ProjectIndex[] = [];
   for (const r of projectRoots) {
-    projects.push(await scanProject({ root: r, onBench: opts.onBench }));
+    projects.push(
+      await scanProject({
+        root: r,
+        onBench: opts.onBench,
+        incrementalBaseline: pickProjectBaseline(r),
+        onIncrementalHit: opts.onIncrementalHit,
+      }),
+    );
   }
 
   const projectByName = new Map(projects.map((p) => [p.project, p]));

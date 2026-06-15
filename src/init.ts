@@ -72,6 +72,9 @@ gaslens scan <root> -o <root>/.gaslens/baseline.json
 
 # 2. (Optionnel mais recommandé) Câble le hook PostToolUse Claude Code.
 gaslens init --section settings-json   # bloc .claude/settings.json prêt à coller
+
+# 3. (Re-scan rapide après édits) — fast-path si rien n'a réellement changé.
+gaslens scan <root> --incremental <root>/.gaslens/baseline.json -o <root>/.gaslens/index.json
 \`\`\`
 
 Quand le hook est câblé, \`gaslens check\` tourne automatiquement après chaque
