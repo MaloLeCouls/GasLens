@@ -119,7 +119,7 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
 
 **Ergonomie LLM (V3 §24 + extensions)** :
 - `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.
@@ -146,8 +146,10 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 
 `lint-webapp` (V3 §21.4) — Phase 1 livrée (WARN, confidence high/medium) : `webapp.mixed_content` (http:// dans tags script/link/img/iframe/source/video/audio + fetch/XHR/img.src côté JS client), `webapp.link_target` (`<a href>` de navigation sans target=, silencieux si `<base target="_top">` global), `webapp.form_submit` (`<form>` avec input/button submit sans `preventDefault`/`return false`). Câblé dans `check` via `enrichWithLintWebappFindings`. **Restent** : `webapp.run_out_of_context` (vague pour V1).
 
+`resolve-live` (V3 §22.1) — Phase 1 (skeleton) livrée : croise `manifest.libraries` × workspace × `receiver_usage` et classe chaque lib en `local` / `external_unfetched` / `external_resolved` / `external_unresolvable` / `declared_unused`. **Interface `LibraryFetcher` pluggable** (default `NoopFetcher` qui renvoie null — la commande est alors un audit local des frontières externes, suffisant pour qu'un agent voie où ça plafonne sans dépendre d'auth). Production de `advice` actionnables. Optionnel, **strictement hors hook chaud** (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`). **Reste** : phase 2 — vraie impl `LibraryFetcher` via Apps Script API `projects.getContent` (auth Google requise, gestion `versions`/`deployments`, cache local), indexation à la volée des libs récupérées et fusion dans `WorkspaceIndex`.
+
 À construire (détail + intérêt dans V3) :
-- Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
+- Optionnels API (V3 §22, hors hook) : `resolve-live` phase 2 (fetcher Apps Script API + cache), `prod-truth` (getMetrics/processes), `deploy-aware` (deployments/versions).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
 - Étendre `GAS_API_DEPRECATED` au fil des observations terrain (Ui.showDialog + ScriptProperties/UserProperties demandent d'ajouter les roots Ui/ScriptProperties au registre GAS_API).
 

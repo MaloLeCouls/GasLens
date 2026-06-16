@@ -29,6 +29,10 @@ import { analyzeManifest, renderManifestText } from './manifest-analysis.js';
 import { validateApi, renderApiValidationText } from './validate-api.js';
 import { lintRuntime, renderLintRuntimeText } from './lint-runtime.js';
 import { lintWebapp, renderLintWebappText } from './lint-webapp.js';
+import {
+  analyzeLiveLibraries,
+  renderResolveLiveText,
+} from './resolve-live.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -472,6 +476,60 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       }
       if (verdict === 'BREAK') process.exit(3);
       if (verdict === 'WARN') process.exit(4);
+      process.exit(0);
+    });
+
+  program
+    .command('resolve-live')
+    .description(
+      "Inventaire honnête des dépendances de librairies (V3 §22.1) : croise " +
+        "manifest.libraries × workspace × receiver_usage et classe chaque lib " +
+        "en local / external_unfetched / external_unresolvable / declared_unused. " +
+        "Optionnel, hors hook chaud. La récupération réseau via Apps Script API " +
+        "(strictement opt-in) sera branchée via un LibraryFetcher dans une phase " +
+        "ultérieure — par défaut, la commande sert d'audit local.",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Filtrer le rapport sur un projet du workspace")
+    .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .action(async (opts: ResolveLiveCliOpts) => {
+      const idxPath = resolve(opts.indexPath);
+      if (!existsSync(idxPath)) {
+        process.stderr.write(
+          `gaslens resolve-live: index introuvable à ${idxPath}. Lance 'gaslens scan'.\n`,
+        );
+        process.exit(2);
+      }
+      let raw: ProjectIndex | WorkspaceIndex;
+      try {
+        raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+          | ProjectIndex
+          | WorkspaceIndex;
+      } catch (err) {
+        process.stderr.write(
+          `gaslens resolve-live: index illisible — ${(err as Error).message}.\n`,
+        );
+        process.exit(2);
+      }
+      await warnIfStale(raw, idxPath);
+      // On passe l'index entier à l'analyseur (le workspace est nécessaire
+      // pour détecter le statut `local`). Le filtre --project se fait après.
+      const report = await analyzeLiveLibraries(raw);
+      const libraries = opts.project
+        ? report.libraries.filter((l) => l.project === opts.project)
+        : report.libraries;
+      if (opts.project && libraries.length === 0) {
+        process.stderr.write(
+          `gaslens resolve-live: --project '${opts.project}' n'a aucune librairie déclarée.\n`,
+        );
+      }
+      const filtered = { ...report, libraries };
+      if (opts.format === 'text') {
+        process.stdout.write(renderResolveLiveText(filtered) + '\n');
+      } else {
+        process.stdout.write(jsonOut(filtered, opts.compact) + '\n');
+      }
       process.exit(0);
     });
 
@@ -1060,6 +1118,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'validate-api', tldr: 'méthodes GAS hallucinées + arity manquante', reads_index: true, emits_findings: true },
   { name: 'lint-runtime', tldr: 'quota/lock/trigger anti-patterns (warn/info)', reads_index: true, emits_findings: true },
   { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
+  { name: 'resolve-live', tldr: 'inventaire libs (local/external_unfetched/declared_unused) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
   { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
@@ -1242,6 +1301,13 @@ interface LintRuntimeCliOpts {
 }
 
 interface LintWebappCliOpts {
+  indexPath: string;
+  project?: string;
+  format: string;
+  compact: boolean;
+}
+
+interface ResolveLiveCliOpts {
   indexPath: string;
   project?: string;
   format: string;
