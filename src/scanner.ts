@@ -166,9 +166,12 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   // ─── True-incremental — éligibilité ───────────────────────────────────
   // On peut sauter le parse + extraction des .gs inchangés si le baseline
   // a les caches per-file nécessaires (issus du nouveau gaslens) et que
-  // ni le manifeste ni aucun .html n'a changé.
+  // le manifeste n'a pas changé. Les changements .html sont supportés via
+  // soustraction des contribs cached des fichiers modifiés (V3 §21).
   let useTrueIncremental = false;
   const unchangedGsFiles = new Set<string>();
+  const unchangedHtmlFiles = new Set<string>();
+  const changedHtmlFiles = new Set<string>();
   if (opts.incrementalBaseline) {
     useTrueIncremental = await isEligibleForTrueIncremental(
       opts.root,
@@ -177,6 +180,8 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       opts.incrementalBaseline,
       file_hashes,
       unchangedGsFiles,
+      unchangedHtmlFiles,
+      changedHtmlFiles,
     );
   }
 
@@ -215,15 +220,28 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
   const htmlBundles: HtmlFileBundle[] = [];
   const html_webapp_signals: HtmlWebappFileSignals[] = [];
-  // En mode true-incremental, l'éligibilité garantit que tous les .html
-  // sont inchangés → on réutilise les signaux et contributions du baseline.
   if (useTrueIncremental && opts.incrementalBaseline) {
+    // Mode incrémental partial : signaux des HTML inchangés repris du baseline,
+    // signaux des HTML changés ré-extraits frais.
     for (const sig of opts.incrementalBaseline.html_webapp_signals ?? []) {
+      if (!unchangedHtmlFiles.has(sig.file)) continue;
       html_webapp_signals.push(sig);
       file_hashes[sig.file] =
         opts.incrementalBaseline.file_hashes?.[sig.file] ??
         file_hashes[sig.file] ??
         '';
+    }
+    for (const absPath of htmlFiles) {
+      const rel = toPosix(relative(opts.root, absPath));
+      if (!changedHtmlFiles.has(rel)) continue;
+      const tRead = Date.now();
+      const source = await readFile(absPath, 'utf8');
+      readMs += Date.now() - tRead;
+      file_hashes[rel] = sha1(source);
+      const tParse = Date.now();
+      htmlBundles.push(processHtmlFile(rel, source));
+      html_webapp_signals.push(extractHtmlWebappSignals(rel, source));
+      parseExtractMs += Date.now() - tParse;
     }
   } else {
     for (const absPath of htmlFiles) {
@@ -253,6 +271,12 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     for (const fn of opts.incrementalBaseline.functions) {
       if (!unchangedGsFiles.has(fn.definition.file)) continue;
       const cloned: FunctionRecord = JSON.parse(JSON.stringify(fn));
+      // Si des .html ont changé, soustraire les contribs de ces fichiers
+      // du record caché — les contribs fraîches seront ré-appliquées en
+      // pass 3 (à tous les records, cf. shouldApplyTo).
+      if (changedHtmlFiles.size > 0) {
+        subtractHtmlContribsFromRecord(cloned, changedHtmlFiles);
+      }
       records.set(cloned.name, cloned);
     }
   }
@@ -528,38 +552,66 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   // inchangés et leurs contribs sont réutilisées depuis le baseline). On
   // applique les contributions du baseline **uniquement** aux records frais
   // (les records cachés les ont déjà reçues lors du scan baseline).
-  const html_contributions: HtmlFileContribution[] =
-    useTrueIncremental && opts.incrementalBaseline
-      ? (opts.incrementalBaseline.html_contributions ?? []).map((c) => ({
-          ...c,
-          client_calls_by_target: { ...c.client_calls_by_target },
-          scriptlet_calls_by_target: { ...c.scriptlet_calls_by_target },
-          contract_contributions_by_target: {
-            ...c.contract_contributions_by_target,
-          },
-          scriptlet_data_reads: [...c.scriptlet_data_reads],
-          unresolved: [...c.unresolved],
-        }))
-      : htmlBundles.map((h) => ({
-          file: h.fileRel,
-          client_calls_by_target: mapToRecord(h.clientCalls),
-          scriptlet_calls_by_target: mapToRecord(h.scriptletCalls),
-          contract_contributions_by_target: mapToRecord(h.contractContributions),
-          scriptlet_data_reads: [...h.scriptletDataReads].sort(),
-          unresolved: [...h.unresolved],
-        }));
+  const html_contributions: HtmlFileContribution[] = [];
+  if (useTrueIncremental && opts.incrementalBaseline) {
+    // Contribs des .html inchangés : repris du baseline (déjà appliqués aux
+    // records cachés via leur clone — n'à réappliquer qu'aux records frais).
+    for (const c of opts.incrementalBaseline.html_contributions ?? []) {
+      if (!unchangedHtmlFiles.has(c.file)) continue;
+      html_contributions.push({
+        ...c,
+        client_calls_by_target: { ...c.client_calls_by_target },
+        scriptlet_calls_by_target: { ...c.scriptlet_calls_by_target },
+        contract_contributions_by_target: {
+          ...c.contract_contributions_by_target,
+        },
+        scriptlet_data_reads: [...c.scriptlet_data_reads],
+        unresolved: [...c.unresolved],
+      });
+    }
+    // Contribs des .html changés : fraîches, à appliquer à TOUS les records
+    // (les records cachés ont eu les anciennes contribs soustraites en pass 2).
+    for (const h of htmlBundles) {
+      html_contributions.push({
+        file: h.fileRel,
+        client_calls_by_target: mapToRecord(h.clientCalls),
+        scriptlet_calls_by_target: mapToRecord(h.scriptletCalls),
+        contract_contributions_by_target: mapToRecord(h.contractContributions),
+        scriptlet_data_reads: [...h.scriptletDataReads].sort(),
+        unresolved: [...h.unresolved],
+      });
+    }
+  } else {
+    for (const h of htmlBundles) {
+      html_contributions.push({
+        file: h.fileRel,
+        client_calls_by_target: mapToRecord(h.clientCalls),
+        scriptlet_calls_by_target: mapToRecord(h.scriptletCalls),
+        contract_contributions_by_target: mapToRecord(h.contractContributions),
+        scriptlet_data_reads: [...h.scriptletDataReads].sort(),
+        unresolved: [...h.unresolved],
+      });
+    }
+  }
 
   const freshRecordNames = new Set<string>(
     bundles.flatMap((b) => b.defs.map((d) => d.name)),
   );
-  // Filtre d'application : en incrémental, on saute les targets cachés
-  // (records venant du baseline, qui ont déjà la contribution appliquée).
-  const shouldApplyTo = (name: string): boolean =>
-    !useTrueIncremental || freshRecordNames.has(name);
+  // Filtre d'application en mode incrémental :
+  //  - contribs d'un .html INCHANGÉ : appliquer SEULEMENT aux records frais
+  //    (les records cachés portent déjà ces contribs depuis le baseline) ;
+  //  - contribs d'un .html CHANGÉ : appliquer à TOUS les records, puisqu'on
+  //    a soustrait les anciennes contribs de ce fichier en pass 2.
+  const shouldApplyTo = (name: string, contribFromChanged: boolean): boolean => {
+    if (!useTrueIncremental) return true;
+    if (contribFromChanged) return true;
+    return freshRecordNames.has(name);
+  };
 
   for (const c of html_contributions) {
+    const fromChanged = changedHtmlFiles.has(c.file);
     for (const [name, exposures] of Object.entries(c.client_calls_by_target)) {
-      if (!shouldApplyTo(name)) continue;
+      if (!shouldApplyTo(name, fromChanged)) continue;
       const rec = records.get(name);
       if (!rec) {
         unresolved.push(
@@ -588,13 +640,13 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       rec.exposures.push(...exposures);
     }
     for (const [name, exposures] of Object.entries(c.scriptlet_calls_by_target)) {
-      if (!shouldApplyTo(name)) continue;
+      if (!shouldApplyTo(name, fromChanged)) continue;
       const rec = records.get(name);
       if (!rec) continue;
       rec.exposures.push(...exposures);
     }
     for (const [name, contrib] of Object.entries(c.contract_contributions_by_target)) {
-      if (!shouldApplyTo(name)) continue;
+      if (!shouldApplyTo(name, fromChanged)) continue;
       const rec = records.get(name);
       if (!rec) continue;
       mergeIntoContract(rec, contrib);
@@ -766,12 +818,16 @@ function mapToRecord<V>(m: Map<string, V>): Record<string, V> {
  * Vérifie si on peut emprunter le chemin true-incremental :
  *  - le baseline a les caches per-file nécessaires (nouvelle version) ;
  *  - le manifeste n'a pas changé (sinon les libraryPrefixes changent) ;
- *  - aucun .html n'a changé (sinon contribs HTML stales) ;
- *  - l'ensemble des .html est identique (pas d'ajout/suppression) ;
+ *  - l'ensemble des .html est identique (pas d'ajout/suppression — un
+ *    nouveau .html ajouterait de nouvelles exposures non tracées dans
+ *    le baseline) ;
+ *  - au moins un .gs est inchangé (sinon full scan vaut le coût) ;
  *  - chaque FunctionRecord du baseline a `outbound_calls` (Phase A).
  *
- * En sortie, peuple `unchangedGsFiles` avec les .gs whose hash matches.
- * Et alimente `file_hashes` pour les fichiers inchangés (qu'on ne re-lit pas).
+ * Les changements de .html sont **supportés** : ils sont classés dans
+ * `changedHtmlFiles` (à ré-extraire) vs `unchangedHtmlFiles` (à réutiliser).
+ * Les contribs des HTML changés seront soustraites des records cachés
+ * en pass 2, puis les nouvelles contribs ré-appliquées en pass 3.
  */
 async function isEligibleForTrueIncremental(
   root: string,
@@ -780,6 +836,8 @@ async function isEligibleForTrueIncremental(
   baseline: ProjectIndex,
   file_hashes: Record<string, string>,
   unchangedGsFiles: Set<string>,
+  unchangedHtmlFiles: Set<string>,
+  changedHtmlFiles: Set<string>,
 ): Promise<boolean> {
   if (
     !baseline.file_hashes ||
@@ -799,7 +857,7 @@ async function isEligibleForTrueIncremental(
   if (file_hashes['appsscript.json'] !== baseline.file_hashes['appsscript.json']) {
     return false;
   }
-  // HTML set identique + chaque .html unchanged (par hash).
+  // HTML set identique entre baseline et présent (pas d'ajout/suppression).
   const currentHtmlRel = new Set(
     htmlAbs.map((p) => toPosix(relative(root, p))),
   );
@@ -811,9 +869,10 @@ async function isEligibleForTrueIncremental(
   if (currentHtmlRel.size !== baselineHtmlRel.size) return false;
   for (const f of currentHtmlRel) {
     if (!baselineHtmlRel.has(f)) return false;
-    // Hash le contenu pour vérifier.
-    const abs = htmlAbs.find((p) => toPosix(relative(root, p)) === f);
-    if (!abs) return false;
+  }
+  // .html : classer changed vs unchanged par hash.
+  for (const abs of htmlAbs) {
+    const rel = toPosix(relative(root, abs));
     let content: string;
     try {
       content = await readFile(abs, 'utf8');
@@ -821,9 +880,11 @@ async function isEligibleForTrueIncremental(
       return false;
     }
     const h = sha1(content);
-    if (h !== baseline.file_hashes[f]) return false;
-    // Ne pas alimenter file_hashes pour les .html ici : on le fait à la
-    // lecture (ou via la branche réutilisation HTML du caller).
+    if (h === baseline.file_hashes[rel]) {
+      unchangedHtmlFiles.add(rel);
+    } else {
+      changedHtmlFiles.add(rel);
+    }
   }
   // .gs : déterminer ceux dont le hash matche baseline (skip parse).
   for (const abs of gsAbs) {
@@ -841,10 +902,67 @@ async function isEligibleForTrueIncremental(
       file_hashes[rel] = h; // évite de re-lire/re-hasher en aval
     }
   }
-  // S'il n'y a aucun .gs réutilisable, pas la peine de payer le coût du
-  // chemin incrémental (et de tester la cohérence) — fallback full scan.
+  // S'il n'y a aucun .gs réutilisable, le chemin partial n'apporte rien.
   if (unchangedGsFiles.size === 0) return false;
   return true;
+}
+
+/**
+ * Soustrait d'un record caché toutes les contributions provenant de fichiers
+ * .html qui ont changé depuis le baseline. Les contribs fraîches seront
+ * ré-appliquées en pass 3.
+ *
+ * Conventions exploitées :
+ *  - `Exposure.file` pointe vers le fichier d'origine (.html pour les
+ *    client_calls et scriptlets) ;
+ *  - `FieldRead.file` (dans `inferred_contract.*.fields_read`) pointe vers
+ *    le .html du handler ;
+ *  - `unresolved_handlers.where` est de la forme `${fileRel}:${line}`.
+ */
+function subtractHtmlContribsFromRecord(
+  rec: FunctionRecord,
+  changedHtmlFiles: Set<string>,
+): void {
+  rec.exposures = rec.exposures.filter((e) => !changedHtmlFiles.has(e.file));
+  const ic = rec.inferred_contract;
+  if (!ic) return;
+  if (ic.return_shape) {
+    ic.return_shape.fields_read = ic.return_shape.fields_read.filter(
+      (f) => !changedHtmlFiles.has(f.file),
+    );
+    if (ic.return_shape.fields_read.length === 0) {
+      ic.return_shape = null;
+    } else {
+      ic.return_shape.field_names = [
+        ...new Set(ic.return_shape.fields_read.map((f) => f.field)),
+      ];
+    }
+  }
+  if (ic.failure_signal) {
+    ic.failure_signal.fields_read = ic.failure_signal.fields_read.filter(
+      (f) => !changedHtmlFiles.has(f.file),
+    );
+    if (ic.failure_signal.fields_read.length === 0) {
+      ic.failure_signal = null;
+    } else {
+      ic.failure_signal.field_names = [
+        ...new Set(ic.failure_signal.fields_read.map((f) => f.field)),
+      ];
+    }
+  }
+  ic.unresolved_handlers = ic.unresolved_handlers.filter((u) => {
+    for (const f of changedHtmlFiles) {
+      if (u.where.startsWith(f + ':')) return false;
+    }
+    return true;
+  });
+  if (
+    !ic.return_shape &&
+    !ic.failure_signal &&
+    ic.unresolved_handlers.length === 0
+  ) {
+    rec.inferred_contract = null;
+  }
 }
 
 /**

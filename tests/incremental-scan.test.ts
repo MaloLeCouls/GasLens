@@ -178,7 +178,7 @@ describe('incremental scan — true per-file path', () => {
     }
   });
 
-  it("retombe en full scan si un .html a changé (correctness > perf)", async () => {
+  it("emprunte le partial path quand un .html a changé : contribs HTML mises à jour", async () => {
     const root = await makeProject({
       'appsscript.json': '{}',
       'main.gs': `function doGet() { return HtmlService.createTemplateFromFile('idx').evaluate(); }
@@ -187,7 +187,12 @@ function go() { return 1; }`,
     });
     try {
       const baseline = await scanProject({ root });
-      // Modifie le HTML.
+      // Avant édition : 'go' a une exposure client_call, 'doGet' n'en a pas.
+      const baselineGo = baseline.functions.find((f) => f.name === 'go')!;
+      expect(baselineGo.exposures.some((e) => e.type === 'client_call')).toBe(
+        true,
+      );
+      // Modifie le HTML : la cible client_call passe de 'go' à 'doGet'.
       await writeFile(
         join(root, 'idx.html'),
         `<html><body><script>google.script.run.doGet()</script></body></html>`,
@@ -201,11 +206,55 @@ function go() { return 1; }`,
           hitReason = info.reason;
         },
       });
-      // Le chemin partial n'est PAS éligible — fallback full scan.
-      expect(hitReason).toBeNull();
-      // L'exposure client_call doit refléter le nouveau HTML (doGet, pas go).
+      // Le chemin partial EST emprunté (HTML changes supportés depuis V3 §21).
+      expect(hitReason).toBe('partial_per_file');
+      // Nouvelle cible client_call : doGet doit en porter une, go ne plus.
       const doGet = incr.functions.find((f) => f.name === 'doGet')!;
+      const go = incr.functions.find((f) => f.name === 'go')!;
       expect(doGet.exposures.some((e) => e.type === 'client_call')).toBe(true);
+      expect(go.exposures.some((e) => e.type === 'client_call')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("équivalence partial vs full quand un .html change (correctness)", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': `function doGet() { return HtmlService.createTemplateFromFile('idx').evaluate(); }
+function alpha() { return { id: 1, name: 'a' }; }
+function beta() { return { ok: true }; }`,
+      'idx.html': `<html><body><script>
+        google.script.run.withSuccessHandler(function(r){console.log(r.id);}).alpha();
+      </script></body></html>`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      // Modifie le HTML — la cible client_call et le handler changent.
+      await writeFile(
+        join(root, 'idx.html'),
+        `<html><body><script>
+          google.script.run.withSuccessHandler(function(r){console.log(r.ok);}).beta();
+        </script></body></html>`,
+        'utf8',
+      );
+      const incr = await scanProject({ root, incrementalBaseline: baseline });
+      // Comparaison à un full scan « propre » (sans baseline).
+      const full = await scanProject({ root });
+      const byKey = (a: { type: string; file: string }, b: { type: string; file: string }) =>
+        (a.type + a.file).localeCompare(b.type + b.file);
+      const pickShape = (fns: typeof full.functions, name: string) => {
+        const f = fns.find((x) => x.name === name);
+        if (!f) return null;
+        return {
+          exposures: f.exposures.map((e) => ({ type: e.type, file: e.file })).sort(byKey),
+          return_fields:
+            f.inferred_contract?.return_shape?.field_names.slice().sort() ?? null,
+        };
+      };
+      for (const n of ['alpha', 'beta', 'doGet']) {
+        expect(pickShape(incr.functions, n)).toEqual(pickShape(full.functions, n));
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

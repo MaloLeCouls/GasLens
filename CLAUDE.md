@@ -133,7 +133,8 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - `ProjectIndex.scan_duration_ms` : timing total du scan.
 - `gaslens scan --bench` : breakdown des phases sur stderr (read / parse+extract / rest). Sample-project : 40 ms total (1 read + 21 parse+extract + 18 rest).
 - **Fast-path incrémental** (`gaslens scan --incremental [baseline]`) : si aucune source n'a une mtime > baseline.scanned_at ET que l'ensemble des fichiers est identique → retour direct du baseline. **×13 sur le sample-project (40 → 3 ms).** Câblé automatiquement dans le hook PostToolUse (réutilise `.gaslens/baseline.json`).
-- **True-incremental partiel** : quand fast-path KO mais que le manifeste et les .html sont inchangés, on saute le parse + extract des .gs dont le hash matche baseline.file_hashes et on réutilise leurs FunctionRecord + caches per-file (`pending_library_calls_by_file`, `unresolved_calls_by_file`). Contributions HTML appliquées seulement aux records frais (les cachés les ont déjà). `rebuildCalledByFromOutboundCalls(records)` reconstruit `called_by` proprement (purge entries stales des records cachés). **×5 sur sample-project quand 1 fichier change** (40 → 8 ms). Fallback full scan si .html ou manifeste changés (correctness > perf).
+- **True-incremental partiel** : quand fast-path KO mais que le manifeste est inchangé, on saute le parse + extract des .gs dont le hash matche baseline.file_hashes et on réutilise leurs FunctionRecord + caches per-file (`pending_library_calls_by_file`, `unresolved_calls_by_file`). Contributions HTML des .html inchangés appliquées seulement aux records frais (les cachés les ont déjà). `rebuildCalledByFromOutboundCalls(records)` reconstruit `called_by` proprement (purge entries stales des records cachés). **×5 sur sample-project quand 1 .gs change** (40 → 8 ms).
+- **Partial étendu aux .html** : un changement .html est désormais supporté en partial (V3 §21, suite). Mécanique : (a) le scanner classe les .html en `unchanged` / `changed` par hash ; (b) `subtractHtmlContribsFromRecord` retire des records cachés les exposures, `inferred_contract.fields_read` et `unresolved_handlers` provenant des .html changés (via `Exposure.file` / `FieldRead.file` / `unresolved_handlers.where`) ; (c) les .html changés sont ré-extraits frais, leurs contribs ré-appliquées à TOUS les records (cachés + frais) ; les contribs des .html inchangés restent appliquées aux frais seulement. Fallback full scan uniquement si appsscript.json a changé ou si le set des fichiers diffère.
 - `FunctionRecord.outbound_calls` : substrat sérialisable du chemin partial.
 - Caches per-file dans l'index : `html_contributions`, `pending_library_calls_by_file`, `unresolved_calls_by_file`.
 
@@ -148,8 +149,7 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 À construire (détail + intérêt dans V3) :
 - Optionnels API (V3 §22, hors hook) : `resolve-live` (libs externes via Apps Script API), `prod-truth` (getMetrics/processes).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
-- Étendre `GAS_API_DEPRECATED` au fil des observations terrain.
-- Extension future de l'incrémental partial : supporter aussi les changements HTML par tracking des exposures par source (synthétique vs HTML vs library).
+- Étendre `GAS_API_DEPRECATED` au fil des observations terrain (Ui.showDialog + ScriptProperties/UserProperties demandent d'ajouter les roots Ui/ScriptProperties au registre GAS_API).
 
 ---
 
