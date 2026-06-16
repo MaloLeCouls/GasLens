@@ -485,13 +485,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description(
       "Inventaire honnête des dépendances de librairies (V3 §22.1) : croise " +
         "manifest.libraries × workspace × receiver_usage et classe chaque lib " +
-        "en local / external_unfetched / external_unresolvable / declared_unused. " +
-        "Optionnel, hors hook chaud. La récupération réseau via Apps Script API " +
-        "(strictement opt-in) sera branchée via un LibraryFetcher dans une phase " +
-        "ultérieure — par défaut, la commande sert d'audit local.",
+        "en local / external_unfetched / external_resolved / external_unresolvable " +
+        "/ declared_unused. Optionnel, hors hook chaud. Par défaut : audit local " +
+        "(NoopFetcher). Avec --use-apps-script-api : récupère la source via " +
+        "projects.getContent (ADC requis ; phase 2).",
     )
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Filtrer le rapport sur un projet du workspace")
+    .option(
+      '--use-apps-script-api',
+      "Active le fetcher Apps Script API (ADC requis : `gcloud auth application-default login`). " +
+        "Strictement hors hook chaud — V3 §22.1 phase 2.",
+      false,
+    )
     .option('--format <fmt>', 'json | text', 'json')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: ResolveLiveCliOpts) => {
@@ -514,9 +520,25 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exit(2);
       }
       await warnIfStale(raw, idxPath);
+      // Branchement du fetcher : NoopFetcher par défaut, AppsScriptApiFetcher
+      // si --use-apps-script-api. Import dynamique pour ne pas charger
+      // google-auth-library tant qu'on ne l'utilise pas.
+      let fetcher: import('./resolve-live.js').LibraryFetcher | undefined;
+      if (opts.useAppsScriptApi) {
+        try {
+          const mod = await import('./fetchers/apps-script-api.js');
+          fetcher = await mod.createAppsScriptApiFetcher();
+        } catch (err) {
+          process.stderr.write(
+            `gaslens resolve-live: impossible d'initialiser le fetcher Apps Script API — ` +
+              `${(err as Error).message}\n`,
+          );
+          process.exit(2);
+        }
+      }
       // On passe l'index entier à l'analyseur (le workspace est nécessaire
       // pour détecter le statut `local`). Le filtre --project se fait après.
-      const report = await analyzeLiveLibraries(raw);
+      const report = await analyzeLiveLibraries(raw, fetcher);
       const libraries = opts.project
         ? report.libraries.filter((l) => l.project === opts.project)
         : report.libraries;
@@ -1377,6 +1399,7 @@ interface LintWebappCliOpts {
 interface ResolveLiveCliOpts {
   indexPath: string;
   project?: string;
+  useAppsScriptApi: boolean;
   format: string;
   compact: boolean;
 }
