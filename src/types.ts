@@ -483,6 +483,12 @@ export interface ProjectIndex {
   unresolved_calls_by_file?: Record<string, UnresolvedCall[]>;
   /** Manifeste parsé — source pour `gaslens manifest` (V3 §21.1). */
   manifest: ProjectManifest;
+  /**
+   * Chemins relatifs des `.gs` contenant le tag JSDoc `@OnlyCurrentDoc`
+   * (V3 §21.1). Quand non vide, Google restreint implicitement les scopes
+   * d'accès document au container — pivot pour `scope.over_broad`.
+   */
+  only_current_doc_files?: string[];
   /** Synthèse coverage projet (V1 §1.5, V2 §10.4). */
   coverage_summary: ProjectCoverageSummary;
   unresolved_calls: UnresolvedCall[];

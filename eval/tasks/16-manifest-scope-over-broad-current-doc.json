@@ -1,0 +1,22 @@
+{
+  "name": "manifest-scope-over-broad-current-doc",
+  "description": "Un agent ajoute @OnlyCurrentDoc au code et déclare oauthScopes avec le scope 'spreadsheets' plein. Le rapport manifest doit lever INFO scope.over_broad (pattern A) — mais sans inonder check : verdict CLEAN et 0 warn. Garantit l'honnêteté du signal (V3 §21.1).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "appsscript.json",
+      "before_contains": "\"exceptionLogging\": \"STACKDRIVER\",",
+      "after": "\"exceptionLogging\": \"STACKDRIVER\",\n  \"oauthScopes\": [\"https://www.googleapis.com/auth/spreadsheets\", \"https://www.googleapis.com/auth/gmail.send\", \"https://www.googleapis.com/auth/userinfo.email\", \"https://www.googleapis.com/auth/script.scriptapp\"],"
+    },
+    {
+      "file": "utils.gs",
+      "before_contains": "function listItems() {",
+      "after": "/**\n * @OnlyCurrentDoc\n */\nfunction listItems() {"
+    }
+  ],
+  "expected": {
+    "verdict": "CLEAN",
+    "warns_max": 0,
+    "breaks_min": 0
+  }
+}

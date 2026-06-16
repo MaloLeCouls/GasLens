@@ -379,3 +379,158 @@ describe('manifest — phase 2 : urlFetchWhitelist', () => {
     }
   });
 });
+
+describe('scanner — @OnlyCurrentDoc detection', () => {
+  it("alimente only_current_doc_files quand le tag JSDoc est présent", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST_NO_DEPS,
+      'main.gs': `/**
+ * Container-bound editor add-on.
+ * @OnlyCurrentDoc
+ */
+function go() { SpreadsheetApp.getActive().getRange('A1').getValue(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      expect(idx.only_current_doc_files).toEqual(['main.gs']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("n'est pas trompé par une chaîne contenant le texte @OnlyCurrentDoc", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST_NO_DEPS,
+      'main.gs': `function go() { const s = '@OnlyCurrentDoc'; return s; }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      expect(idx.only_current_doc_files ?? []).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('manifest — scope.over_broad : pattern A (@OnlyCurrentDoc + scope plein)', () => {
+  it("INFO scope.over_broad quand @OnlyCurrentDoc + 'spreadsheets' plein", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      }),
+      'main.gs': `/**
+ * @OnlyCurrentDoc
+ */
+function go() { SpreadsheetApp.getActive().getRange('A1').getValue(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      const e = report.entries.find((x) => x.kind === 'scope.over_broad');
+      expect(e?.severity).toBe('info');
+      expect(e?.symbol).toBe('https://www.googleapis.com/auth/spreadsheets');
+      expect(e?.fix_hint).toContain('spreadsheets.currentonly');
+      // Reste CLEAN (INFO ne fait pas basculer le verdict).
+      expect(report.verdict).toBe('CLEAN');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("silencieux si .currentonly est déjà déclaré à côté du plein", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: [
+          'https://www.googleapis.com/auth/spreadsheets',
+          'https://www.googleapis.com/auth/spreadsheets.currentonly',
+        ],
+      }),
+      'main.gs': `/**
+ * @OnlyCurrentDoc
+ */
+function go() { SpreadsheetApp.getActive().getRange('A1').getValue(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'scope.over_broad')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("silencieux sans @OnlyCurrentDoc même si scope plein déclaré", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      }),
+      'main.gs': `function go() { SpreadsheetApp.getActive().getRange('A1').getValue(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'scope.over_broad')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('manifest — scope.over_broad : pattern B (MailApp seul + scope Gmail large)', () => {
+  it("INFO scope.over_broad quand MailApp utilisé seul avec mail.google.com/", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: ['https://mail.google.com/'],
+      }),
+      'main.gs': `function go() { MailApp.sendEmail('a@b.c', 's', 'b'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      const e = report.entries.find((x) => x.kind === 'scope.over_broad');
+      expect(e?.severity).toBe('info');
+      expect(e?.symbol).toBe('https://mail.google.com/');
+      expect(e?.fix_hint).toContain('script.send_mail');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("silencieux si GmailApp est aussi utilisé (intention élargie)", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: ['https://mail.google.com/'],
+      }),
+      'main.gs': `function go() {
+        MailApp.sendEmail('a@b.c', 's', 'b');
+        GmailApp.getInboxThreads();
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'scope.over_broad')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("silencieux si script.send_mail est déjà déclaré à côté du scope large", async () => {
+    const root = await makeProject({
+      'appsscript.json': JSON.stringify({
+        oauthScopes: [
+          'https://mail.google.com/',
+          'https://www.googleapis.com/auth/script.send_mail',
+        ],
+      }),
+      'main.gs': `function go() { MailApp.sendEmail('a@b.c', 's', 'b'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = analyzeManifest(idx);
+      expect(report.entries.filter((e) => e.kind === 'scope.over_broad')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

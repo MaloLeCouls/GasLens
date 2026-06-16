@@ -73,6 +73,7 @@ export interface ManifestReportEntry {
     | 'advanced_service.unused'
     | 'scope.missing'
     | 'scope.unused'
+    | 'scope.over_broad'
     | 'urlfetch.not_whitelisted';
   severity: 'break' | 'warn' | 'info';
   symbol: string;
@@ -154,7 +155,11 @@ export function analyzeManifest(index: ProjectIndex): ManifestReport {
   }
 
   // Phase 2 : croisements OAuth scopes + urlFetchWhitelist.
-  const scopeEntries = analyzeScopes(index.manifest, callsByReceiver);
+  const scopeEntries = analyzeScopes(
+    index.manifest,
+    callsByReceiver,
+    index.only_current_doc_files ?? [],
+  );
   for (const e of scopeEntries) {
     entries.push(e);
     findings.push(...toFindings(e, index.project));
@@ -266,6 +271,7 @@ function consumerKindFor(
       return 'manifest.advanced_service';
     case 'scope.missing':
     case 'scope.unused':
+    case 'scope.over_broad':
       return 'manifest.scope';
     case 'urlfetch.not_whitelisted':
       return 'manifest.urlfetch_whitelist';
@@ -274,9 +280,56 @@ function consumerKindFor(
   }
 }
 
+/**
+ * Paires (scope plein → variante `.currentonly`) pour le pattern A de
+ * `scope.over_broad`. Quand `@OnlyCurrentDoc` est déclaré dans le code,
+ * Google restreint déjà l'accès au document container — déclarer le scope
+ * plein est inutilement large.
+ */
+const CURRENTONLY_PAIRS: Array<{
+  full: string;
+  current_only: string;
+  service: string;
+}> = [
+  {
+    full: 'https://www.googleapis.com/auth/spreadsheets',
+    current_only: 'https://www.googleapis.com/auth/spreadsheets.currentonly',
+    service: 'SpreadsheetApp',
+  },
+  {
+    full: 'https://www.googleapis.com/auth/documents',
+    current_only: 'https://www.googleapis.com/auth/documents.currentonly',
+    service: 'DocumentApp',
+  },
+  {
+    full: 'https://www.googleapis.com/auth/forms',
+    current_only: 'https://www.googleapis.com/auth/forms.currentonly',
+    service: 'FormApp',
+  },
+  {
+    full: 'https://www.googleapis.com/auth/presentations',
+    current_only: 'https://www.googleapis.com/auth/presentations.currentonly',
+    service: 'SlidesApp',
+  },
+];
+
+/**
+ * Scopes Gmail "larges" — quand le code n'utilise que MailApp (pas GmailApp),
+ * `script.send_mail` suffit largement (pattern B de `scope.over_broad`).
+ */
+const BROAD_GMAIL_SCOPES = new Set<string>([
+  'https://mail.google.com/',
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/gmail.compose',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
+]);
+const SEND_MAIL_SCOPE = 'https://www.googleapis.com/auth/script.send_mail';
+
 function analyzeScopes(
   manifest: ProjectManifest,
   callsByReceiver: Map<string, ReceiverUsage[]>,
+  onlyCurrentDocFiles: string[],
 ): ManifestReportEntry[] {
   // L'auto-détection Google joue tant que `oauthScopes` n'est PAS explicite.
   // On reste donc silencieux dans ce cas — c'est la doctrine d'honnêteté.
@@ -324,6 +377,50 @@ function analyzeScopes(
       fix_hint: `retirer ce scope d'oauthScopes — un scope inutile peut compliquer le consentement utilisateur`,
       call_sites: [],
     });
+  }
+
+  // scope.over_broad — pattern A : @OnlyCurrentDoc + scope plein.
+  // Conservatif : on n'émet que si la variante `.currentonly` n'est PAS déjà
+  // déclarée à côté (sinon le full peut viser un autre usage légitime).
+  if (onlyCurrentDocFiles.length > 0) {
+    for (const { full, current_only, service } of CURRENTONLY_PAIRS) {
+      if (!declared.has(full)) continue;
+      if (declared.has(current_only)) continue;
+      const calls = callsByReceiver.get(service) ?? [];
+      out.push({
+        kind: 'scope.over_broad',
+        severity: 'info',
+        symbol: full,
+        reason:
+          `'@OnlyCurrentDoc' détecté dans ${onlyCurrentDocFiles.length} fichier(s) ` +
+          `(Google restreint déjà l'accès au document container) mais oauthScopes ` +
+          `déclare le scope plein '${full}' au lieu de la variante '.currentonly'`,
+        fix_hint: `remplacer '${full}' par '${current_only}' dans oauthScopes`,
+        call_sites: callSitesOf(calls).slice(0, 3),
+      });
+    }
+  }
+
+  // scope.over_broad — pattern B : MailApp seul + scope Gmail large.
+  // Conservatif : silencieux si GmailApp est utilisé ailleurs, ou si
+  // `script.send_mail` est déjà déclaré (intention explicite restreinte).
+  if (callsByReceiver.has('MailApp') && !callsByReceiver.has('GmailApp')) {
+    const broad = manifest.oauth_scopes.find((s) => BROAD_GMAIL_SCOPES.has(s));
+    if (broad && !declared.has(SEND_MAIL_SCOPE)) {
+      const calls = callsByReceiver.get('MailApp') ?? [];
+      out.push({
+        kind: 'scope.over_broad',
+        severity: 'info',
+        symbol: broad,
+        reason:
+          `le code utilise uniquement MailApp (pas GmailApp) mais oauthScopes ` +
+          `déclare '${broad}' — un scope Gmail large pour un usage limité à l'envoi`,
+        fix_hint:
+          `remplacer '${broad}' par '${SEND_MAIL_SCOPE}' dans oauthScopes ` +
+          `(suffisant pour MailApp.sendEmail/sendEmailFromUser)`,
+        call_sites: callSitesOf(calls).slice(0, 3),
+      });
+    }
   }
 
   return out;

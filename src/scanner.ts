@@ -181,6 +181,15 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   }
 
   const bundles: FileBundle[] = [];
+  // V3 §21.1 — fichiers contenant `@OnlyCurrentDoc` (JSDoc tag).
+  const only_current_doc_files: string[] = [];
+  // Préchargement depuis le baseline en mode true-incremental : on garde le
+  // flag des .gs cachés (on ne les re-lit pas).
+  if (useTrueIncremental && opts.incrementalBaseline) {
+    for (const f of opts.incrementalBaseline.only_current_doc_files ?? []) {
+      if (unchangedGsFiles.has(f)) only_current_doc_files.push(f);
+    }
+  }
   let readMs = 0;
   let parseExtractMs = 0;
   for (const absPath of gsFiles) {
@@ -195,6 +204,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     const source = await readFile(absPath, 'utf8');
     readMs += Date.now() - tRead;
     file_hashes[rel] = sha1(source);
+    if (hasOnlyCurrentDocTag(source)) only_current_doc_files.push(rel);
     const tParse = Date.now();
     const tree = parseSource(source);
     const defs = extractDefinitions(tree.rootNode, rel);
@@ -711,6 +721,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     pending_library_calls_by_file,
     unresolved_calls_by_file,
     manifest: manifest.manifest,
+    only_current_doc_files,
     coverage_summary,
     unresolved_calls: [...collisions, ...unresolved],
     file_hashes,
@@ -732,6 +743,17 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
 function sha1(s: string): string {
   return createHash('sha1').update(s).digest('hex');
+}
+
+/**
+ * Détecte le tag JSDoc `@OnlyCurrentDoc` dans un source `.gs`. Doctrine V1
+ * prudente : on accepte n'importe quelle occurrence dans un commentaire bloc
+ * `/** ... *​/` (le cas Google : commentaire de fichier ou de fonction).
+ * On évite les chaînes pour ne pas confondre `'@OnlyCurrentDoc'` littéral.
+ */
+function hasOnlyCurrentDocTag(source: string): boolean {
+  const re = /\/\*\*[\s\S]*?@OnlyCurrentDoc\b[\s\S]*?\*\//;
+  return re.test(source);
 }
 
 function mapToRecord<V>(m: Map<string, V>): Record<string, V> {
