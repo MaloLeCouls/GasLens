@@ -119,7 +119,7 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
 
 **Ergonomie LLM (V3 §24 + extensions)** :
 - `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.
@@ -148,8 +148,10 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 
 `resolve-live` (V3 §22.1) — Phase 1 (skeleton) livrée : croise `manifest.libraries` × workspace × `receiver_usage` et classe chaque lib en `local` / `external_unfetched` / `external_resolved` / `external_unresolvable` / `declared_unused`. **Interface `LibraryFetcher` pluggable** (default `NoopFetcher` qui renvoie null — la commande est alors un audit local des frontières externes, suffisant pour qu'un agent voie où ça plafonne sans dépendre d'auth). Production de `advice` actionnables. Optionnel, **strictement hors hook chaud** (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`). **Reste** : phase 2 — vraie impl `LibraryFetcher` via Apps Script API `projects.getContent` (auth Google requise, gestion `versions`/`deployments`, cache local), indexation à la volée des libs récupérées et fusion dans `WorkspaceIndex`.
 
+`prod-truth` (V3 §22.2) — Phase 1 (skeleton) livrée : croise les expositions statiques (`exposures` + `called_by`) avec les métriques prod (`executions_count`, `error_rate`, `last_execution_at`) pour annoter chaque fonction d'un `cross_status` parmi `confirmed_dead` / `dispatched_dynamic` / `cold_exposed` / `errored` / `live` / `unknown`, et d'un `heat` parmi `hot|warm|cold|unknown`. **Interface `MetricsProvider` pluggable** (default `NoopMetricsProvider` qui renvoie `[]` — tout est alors `unknown`, et la commande sert d'inventaire de la surface à enrichir). Provider en erreur dégrade silencieusement en `unknown` (consultatif, jamais bloquant). Production d'`advice` actionnables (`NE PAS supprimer` sur dispatched_dynamic, etc.). Strictement hors hook chaud. **Reste** : phase 2 — vraie impl `MetricsProvider` via `projects.getMetrics` + `processes.list`, gestion fenêtres glissantes, mémorisation.
+
 À construire (détail + intérêt dans V3) :
-- Optionnels API (V3 §22, hors hook) : `resolve-live` phase 2 (fetcher Apps Script API + cache), `prod-truth` (getMetrics/processes), `deploy-aware` (deployments/versions).
+- Optionnels API phase 2 (V3 §22, auth Google) : impl `LibraryFetcher` (`resolve-live` §22.1) puis `MetricsProvider` (`prod-truth` §22.2). `deploy-aware` (§22.3) ensuite.
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
 - Étendre `GAS_API_DEPRECATED` au fil des observations terrain (Ui.showDialog + ScriptProperties/UserProperties demandent d'ajouter les roots Ui/ScriptProperties au registre GAS_API).
 

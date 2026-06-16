@@ -33,6 +33,7 @@ import {
   analyzeLiveLibraries,
   renderResolveLiveText,
 } from './resolve-live.js';
+import { analyzeProdTruth, renderProdTruthText } from './prod-truth.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -527,6 +528,71 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       const filtered = { ...report, libraries };
       if (opts.format === 'text') {
         process.stdout.write(renderResolveLiveText(filtered) + '\n');
+      } else {
+        process.stdout.write(jsonOut(filtered, opts.compact) + '\n');
+      }
+      process.exit(0);
+    });
+
+  program
+    .command('prod-truth')
+    .description(
+      "Annote les fonctions avec la vérité d'exécution (V3 §22.2) : croise " +
+        "les expositions statiques avec les métriques prod (executions, error_rate) " +
+        "pour distinguer confirmed_dead / dispatched_dynamic / cold_exposed / errored / live. " +
+        "Consultatif, jamais bloquant. Par défaut, MetricsProvider no-op → tout en `unknown` " +
+        "(la commande sert alors d'inventaire de la surface à enrichir).",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Filtrer le rapport sur un projet du workspace")
+    .option('--window-days <n>', "Fenêtre d'agrégation (jours)", '30')
+    .option(
+      '--error-rate-threshold <p>',
+      "Seuil 0..1 au-dessus duquel 'errored' est levé",
+      '0.05',
+    )
+    .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .action(async (opts: ProdTruthCliOpts) => {
+      const idxPath = resolve(opts.indexPath);
+      if (!existsSync(idxPath)) {
+        process.stderr.write(
+          `gaslens prod-truth: index introuvable à ${idxPath}. Lance 'gaslens scan'.\n`,
+        );
+        process.exit(2);
+      }
+      let raw: ProjectIndex | WorkspaceIndex;
+      try {
+        raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+          | ProjectIndex
+          | WorkspaceIndex;
+      } catch (err) {
+        process.stderr.write(
+          `gaslens prod-truth: index illisible — ${(err as Error).message}.\n`,
+        );
+        process.exit(2);
+      }
+      await warnIfStale(raw, idxPath);
+      const window_days = parsePositiveInt(opts.windowDays, '--window-days');
+      const error_rate_threshold = parseUnitFloat(
+        opts.errorRateThreshold,
+        '--error-rate-threshold',
+      );
+      const report = await analyzeProdTruth(raw, undefined, {
+        window_days,
+        error_rate_threshold,
+      });
+      const entries = opts.project
+        ? report.entries.filter((e) => e.project === opts.project)
+        : report.entries;
+      if (opts.project && entries.length === 0) {
+        process.stderr.write(
+          `gaslens prod-truth: --project '${opts.project}' n'a aucune fonction indexée.\n`,
+        );
+      }
+      const filtered = { ...report, entries };
+      if (opts.format === 'text') {
+        process.stdout.write(renderProdTruthText(filtered) + '\n');
       } else {
         process.stdout.write(jsonOut(filtered, opts.compact) + '\n');
       }
@@ -1119,6 +1185,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'lint-runtime', tldr: 'quota/lock/trigger anti-patterns (warn/info)', reads_index: true, emits_findings: true },
   { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
   { name: 'resolve-live', tldr: 'inventaire libs (local/external_unfetched/declared_unused) ; hors hook chaud', reads_index: true, emits_findings: false },
+  { name: 'prod-truth', tldr: 'croise expositions × métriques prod (confirmed_dead / dispatched_dynamic / errored) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
   { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
@@ -1312,6 +1379,31 @@ interface ResolveLiveCliOpts {
   project?: string;
   format: string;
   compact: boolean;
+}
+
+interface ProdTruthCliOpts {
+  indexPath: string;
+  project?: string;
+  windowDays: string;
+  errorRateThreshold: string;
+  format: string;
+  compact: boolean;
+}
+
+function parsePositiveInt(v: string, flag: string): number {
+  const n = Number.parseInt(v, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${flag} doit être un entier > 0 (reçu '${v}')`);
+  }
+  return n;
+}
+
+function parseUnitFloat(v: string, flag: string): number {
+  const n = Number.parseFloat(v);
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    throw new Error(`${flag} doit être dans [0, 1] (reçu '${v}')`);
+  }
+  return n;
 }
 
 function pickManifestTargets(
