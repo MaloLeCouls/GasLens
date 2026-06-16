@@ -316,6 +316,63 @@ describe('validate-api — api.deprecated', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('WARN sur ScriptApp.getProjectKey() — suggère getScriptId()', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() { return ScriptApp.getProjectKey(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('WARN');
+      const e = report.entries.find((x) => x.kind === 'api.deprecated');
+      expect(e?.on_type).toBe('ScriptApp');
+      expect(e?.method).toBe('getProjectKey');
+      expect(e?.deprecation_replacement).toBe('ScriptApp.getScriptId()');
+      // S'assure qu'on ne lève PAS un faux unknown_method (la méthode existe).
+      expect(report.entries.some((x) => x.kind === 'api.unknown_method')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('WARN sur Session.getActiveUser().getUserLoginId() — suggère getEmail()', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function whoami() { return Session.getActiveUser().getUserLoginId(); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('WARN');
+      const e = report.entries.find((x) => x.kind === 'api.deprecated');
+      expect(e?.on_type).toBe('User');
+      expect(e?.method).toBe('getUserLoginId');
+      expect(e?.deprecation_replacement).toBe('user.getEmail()');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('CLEAN sur les remplacements modernes (getScriptId, getEmail)', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        const id = ScriptApp.getScriptId();
+        const email = Session.getActiveUser().getEmail();
+        return id + ':' + email;
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('CLEAN');
+      expect(report.entries).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('validate-api — rendu texte', () => {

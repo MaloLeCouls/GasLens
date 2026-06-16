@@ -1,0 +1,16 @@
+{
+  "name": "api-deprecated-user-login-id",
+  "description": "Un agent introduit User.getUserLoginId() — déprécié depuis 2013, remplacé par getEmail(). validate-api doit lever WARN api.deprecated avec suggestion 'user.getEmail()' (V3 §21.2 phase 3, registre étendu).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "users.gs",
+      "before_contains": "return [Session.getActiveUser().getEmail(), 'user', new Date()];",
+      "after": "return [Session.getActiveUser().getUserLoginId(), 'user', new Date()];"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}

@@ -440,6 +440,8 @@ export const GAS_API: GasApiRegistry = {
     getOAuthToken: { returns: 'string' },
     getIdentityToken: { returns: 'string' },
     getScriptId: { returns: 'string' },
+    // Déprécié mais toujours présent (voir GAS_API_DEPRECATED).
+    getProjectKey: { returns: 'string' },
     invalidateAuth: { returns: 'void' },
     requireAllScopes: { returns: 'void' },
     requireScopesForCurrentUser: { returns: 'void' },
@@ -1006,6 +1008,20 @@ export const GAS_API_DEPRECATED: Record<
     jsonStringify: {
       reason: "Utilities.jsonStringify est déprécié — JSON natif est disponible sous V8.",
       replacement: 'JSON.stringify(obj)',
+    },
+  },
+  ScriptApp: {
+    getProjectKey: {
+      reason:
+        "ScriptApp.getProjectKey est déprécié dans la doc Apps Script — utiliser ScriptApp.getScriptId() à la place (l'ID est devenu la clé canonique du projet).",
+      replacement: 'ScriptApp.getScriptId()',
+    },
+  },
+  User: {
+    getUserLoginId: {
+      reason:
+        "User.getUserLoginId est déprécié depuis juin 2013 — remplacé par User.getEmail() (mêmes valeurs, nom plus précis).",
+      replacement: 'user.getEmail()',
     },
   },
 };
