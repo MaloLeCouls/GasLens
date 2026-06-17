@@ -639,7 +639,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         "les expositions statiques avec les métriques prod (executions, error_rate) " +
         "pour distinguer confirmed_dead / dispatched_dynamic / cold_exposed / errored / live. " +
         "Consultatif, jamais bloquant. Par défaut, MetricsProvider no-op → tout en `unknown` " +
-        "(la commande sert alors d'inventaire de la surface à enrichir).",
+        "(la commande sert alors d'inventaire de la surface à enrichir). Avec " +
+        "--use-apps-script-api : agrège processes:listScriptProcesses (ADC requis ; phase 2).",
     )
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Filtrer le rapport sur un projet du workspace")
@@ -648,6 +649,25 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       '--error-rate-threshold <p>',
       "Seuil 0..1 au-dessus duquel 'errored' est levé",
       '0.05',
+    )
+    .option(
+      '--use-apps-script-api',
+      "Active le provider Apps Script API (ADC requis : `gcloud auth application-default login`). " +
+        "Strictement hors hook chaud — V3 §22.2 phase 2.",
+      false,
+    )
+    .option(
+      '--script-id <id>',
+      "scriptId du projet (mono-projet). Sinon : lecture automatique de <root>/.clasp.json.",
+    )
+    .option(
+      '--script-id-map <json>',
+      "Map projet → scriptId au format JSON (workspace). Ex : '{\"AppA\":\"sid-a\",\"AppB\":\"sid-b\"}'.",
+    )
+    .option(
+      '--max-pages <n>',
+      "Plafond de pagination du provider Apps Script API (50 processes/page).",
+      '20',
     )
     .option('--format <fmt>', 'json | text', 'json')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
@@ -676,9 +696,44 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         opts.errorRateThreshold,
         '--error-rate-threshold',
       );
-      const report = await analyzeProdTruth(raw, undefined, {
+
+      // Provider : noop par défaut, Apps Script API si --use-apps-script-api.
+      // Imports dynamiques pour ne charger google-auth-library qu'à la demande.
+      let provider: import('./prod-truth.js').MetricsProvider | undefined;
+      let script_id_by_project: Map<string, string> | undefined;
+      if (opts.useAppsScriptApi) {
+        try {
+          const mod = await import('./providers/apps-script-metrics.js');
+          provider = await mod.createAppsScriptMetricsProvider({
+            max_pages: parsePositiveInt(opts.maxPages, '--max-pages'),
+          });
+        } catch (err) {
+          process.stderr.write(
+            `gaslens prod-truth: impossible d'initialiser le provider Apps Script API — ` +
+              `${(err as Error).message}\n`,
+          );
+          process.exit(2);
+        }
+        const overrides = parseScriptIdOverrides(
+          raw,
+          opts.scriptId,
+          opts.scriptIdMap,
+        );
+        const { buildScriptIdMap } = await import('./script-id.js');
+        script_id_by_project = await buildScriptIdMap(raw, overrides);
+        if (script_id_by_project.size === 0) {
+          process.stderr.write(
+            `gaslens prod-truth: --use-apps-script-api actif mais aucun scriptId connu. ` +
+              `Renseigne --script-id <id> (mono-projet) ou --script-id-map <json>, ` +
+              `ou ajoute un .clasp.json à la racine du projet.\n`,
+          );
+        }
+      }
+
+      const report = await analyzeProdTruth(raw, provider, {
         window_days,
         error_rate_threshold,
+        ...(script_id_by_project ? { script_id_by_project } : {}),
       });
       const entries = opts.project
         ? report.entries.filter((e) => e.project === opts.project)
@@ -1283,7 +1338,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'lint-runtime', tldr: 'quota/lock/trigger anti-patterns (warn/info)', reads_index: true, emits_findings: true },
   { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
-  { name: 'prod-truth', tldr: 'croise expositions × métriques prod (confirmed_dead / dispatched_dynamic / errored) ; hors hook chaud', reads_index: true, emits_findings: false },
+  { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
   { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
@@ -1490,8 +1545,59 @@ interface ProdTruthCliOpts {
   project?: string;
   windowDays: string;
   errorRateThreshold: string;
+  useAppsScriptApi: boolean;
+  scriptId?: string;
+  scriptIdMap?: string;
+  maxPages: string;
   format: string;
   compact: boolean;
+}
+
+function parseScriptIdOverrides(
+  raw: ProjectIndex | WorkspaceIndex,
+  scriptIdSingle: string | undefined,
+  scriptIdMap: string | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (scriptIdMap) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(scriptIdMap);
+    } catch (err) {
+      throw new Error(
+        `--script-id-map: JSON invalide (${(err as Error).message})`,
+      );
+    }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error(
+        `--script-id-map: attendu un objet JSON {projet: scriptId}`,
+      );
+    }
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v !== 'string' || v.length === 0) continue;
+      out[k] = v;
+    }
+  }
+  if (scriptIdSingle) {
+    // Mono-projet : applique au seul projet (ProjectIndex) ou au premier
+    // projet du workspace (avec un warning si plusieurs).
+    if (raw.kind === 'workspace') {
+      if (raw.projects.length > 1 && !scriptIdMap) {
+        process.stderr.write(
+          `gaslens prod-truth: --script-id seul sur un workspace de ${raw.projects.length} projets — ` +
+            `appliqué à '${raw.projects[0]!.project}'. Préférer --script-id-map pour les autres.\n`,
+        );
+      }
+      out[raw.projects[0]!.project] = scriptIdSingle;
+    } else {
+      out[raw.project] = scriptIdSingle;
+    }
+  }
+  return out;
 }
 
 function parsePositiveInt(v: string, flag: string): number {

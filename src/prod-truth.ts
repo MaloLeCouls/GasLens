@@ -20,6 +20,13 @@ export interface FunctionMetrics {
   last_execution_at: string | null;
   /** Largeur de la fenêtre d'agrégation. */
   window_days: number | null;
+  /**
+   * Vrai si le provider a arrêté la pagination avant la fin (ex: cap
+   * `max_pages` atteint sur un script très actif). Les compteurs sont alors
+   * des **minorants** — à interpréter avec prudence (un `confirmed_dead` reste
+   * fiable, mais le `executions_count` peut sous-estimer la réalité).
+   */
+  truncated?: boolean;
 }
 
 /**
@@ -112,6 +119,13 @@ export interface AnalyzeProdTruthOpts {
   window_days?: number;
   /** Seuil au-dessus duquel `errored` est levé. Défaut 0.05 (5 %). */
   error_rate_threshold?: number;
+  /**
+   * Map projet → scriptId, passée telle quelle au `MetricsProvider`.
+   * Typiquement construite via `buildScriptIdMap` (lecture `.clasp.json` +
+   * overrides CLI). Les projets absents de la map verront `scriptId: null`
+   * → le provider Apps Script renverra `[]` et la fonction restera `unknown`.
+   */
+  script_id_by_project?: Map<string, string>;
 }
 
 export async function analyzeProdTruth(
@@ -129,7 +143,7 @@ export async function analyzeProdTruth(
     const names = p.functions.map((f) => f.name);
     if (names.length === 0) continue;
     const raw = await safeGetMetrics(provider, {
-      scriptId: null,
+      scriptId: opts.script_id_by_project?.get(p.project) ?? null,
       project: p.project,
       function_names: names,
       window_days,

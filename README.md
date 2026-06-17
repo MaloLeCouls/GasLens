@@ -79,7 +79,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens lint-runtime` | Anti-patterns quota/lock/trigger (warn/info) |
 | `gaslens lint-webapp` | `mixed_content` / `link_target` / `form_submit` sur les `.html` servis |
 | `gaslens resolve-live` | Inventaire des libs (`local` / `external_*` / `declared_unused`). Cache disque + `--use-apps-script-api` + `--enrich-output` pour fusionner les libs dans le WorkspaceIndex |
-| `gaslens prod-truth` | Croise expositions × métriques prod (skeleton — `MetricsProvider` pluggable) |
+| `gaslens prod-truth` | Croise expositions × métriques prod (`confirmed_dead` / `errored` / `dispatched_dynamic`). `--use-apps-script-api` agrège `processes:listScriptProcesses` |
 | `gaslens emit-dts` | `.d.ts` pour `google.script.run` côté client (pont vers `tsc`) |
 | `gaslens emit-contract-tests` | Harnais `.gs` de test de contrat (sandbox uniquement — effets de bord réels) |
 | `gaslens commands` | Liste compacte des commandes (utile pour un agent qui découvre l'outil) |
@@ -219,6 +219,24 @@ gaslens resolve-live --use-apps-script-api --enrich-output ./.gaslens/index.enri
 
 Strictement opt-in, **hors hook chaud** — la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`.
 
+### Vérité d'exécution (V3 §22.2)
+
+Pour distinguer `confirmed_dead` (à supprimer) de `dispatched_dynamic` (NE PAS supprimer — appelée par un chemin invisible au statique) :
+
+```bash
+# Audit local — tout en 'unknown' (inventaire de la surface).
+gaslens prod-truth --index-path ./.gaslens/index.json
+
+# Branche le provider Apps Script API (scope `script.processes`).
+# scriptId résolu automatiquement depuis <root>/.clasp.json.
+gaslens prod-truth --use-apps-script-api --window-days 30
+
+# Workspace multi-projets : map projet → scriptId explicite.
+gaslens prod-truth --use-apps-script-api --script-id-map '{"AppA":"sid-a","AppB":"sid-b"}'
+```
+
+Sortie : `confirmed_dead` / `dispatched_dynamic` / `cold_exposed` / `errored` / `live` / `unknown` par fonction, avec advice actionnables. Jamais bloquant — consultatif uniquement.
+
 ---
 
 ## Performance
@@ -253,7 +271,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 306 tests
+npm test            # vitest run — 321 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```

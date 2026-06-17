@@ -68,6 +68,8 @@ src/
   prod-truth.ts                vérité d'exécution (V3 §22.2 phase 1) ; MetricsProvider pluggable
   fetchers/apps-script-api.ts  fetcher Apps Script API (projects.getContent, ADC + fetch natif ; V3 §22.1 phase 2)
   fetchers/lib-cache.ts        cache disque scannable pour LibraryFetcher (V3 §22.1 phase 3) ; --refresh, readOnly
+  providers/apps-script-metrics.ts  provider MetricsProvider via processes:listScriptProcesses (V3 §22.2 phase 2) ; pagination + agrégation par function_name + cache mémoire
+  script-id.ts                 résolution du scriptId par projet : .clasp.json à la racine + overrides CLI
   mcp-server.ts                serveur MCP stdio (V3 §24) — 4 outils consolidés (map/inspect/impact/check) ; bin/gaslens-mcp.js launcher
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
   eval.ts                      rejoue eval/tasks/*.json (inclut findings manifeste + validate-api via enrichWith*Findings)
@@ -158,10 +160,13 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 
 Production de `advice` actionnables. Optionnel, **strictement hors hook chaud** (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`).
 
-`prod-truth` (V3 §22.2) — Phase 1 (skeleton) livrée : croise les expositions statiques (`exposures` + `called_by`) avec les métriques prod (`executions_count`, `error_rate`, `last_execution_at`) pour annoter chaque fonction d'un `cross_status` parmi `confirmed_dead` / `dispatched_dynamic` / `cold_exposed` / `errored` / `live` / `unknown`, et d'un `heat` parmi `hot|warm|cold|unknown`. **Interface `MetricsProvider` pluggable** (default `NoopMetricsProvider` qui renvoie `[]` — tout est alors `unknown`, et la commande sert d'inventaire de la surface à enrichir). Provider en erreur dégrade silencieusement en `unknown` (consultatif, jamais bloquant). Production d'`advice` actionnables (`NE PAS supprimer` sur dispatched_dynamic, etc.). Strictement hors hook chaud. **Reste** : phase 2 — vraie impl `MetricsProvider` via `projects.getMetrics` + `processes.list`, gestion fenêtres glissantes, mémorisation.
+`prod-truth` (V3 §22.2) — Phases 1 + 2 livrées :
+- **Phase 1** : croise les expositions statiques (`exposures` + `called_by`) avec les métriques prod (`executions_count`, `error_rate`, `last_execution_at`) pour annoter chaque fonction d'un `cross_status` parmi `confirmed_dead` / `dispatched_dynamic` / `cold_exposed` / `errored` / `live` / `unknown`, et d'un `heat` parmi `hot|warm|cold|unknown`. **Interface `MetricsProvider` pluggable** (default `NoopMetricsProvider` qui renvoie `[]` — tout est alors `unknown`, et la commande sert d'inventaire de la surface à enrichir). Provider en erreur dégrade silencieusement en `unknown` (consultatif, jamais bloquant). Production d'`advice` actionnables (`NE PAS supprimer` sur dispatched_dynamic, etc.).
+- **Phase 2** : `createAppsScriptMetricsProvider` (`src/providers/apps-script-metrics.ts`) implémente le provider via `processes:listScriptProcesses`. Stratégie : 1 appel API par `scriptId` × fenêtre (pas un par fonction — pagination + agrégation client), classification des `processStatus` (FAILED + TIMED_OUT → `error_count`), `last_execution_at` = max start time. Cache mémoire keyé par `scriptId#window_days`. `max_pages` (défaut 20, ≈ 1000 processes) avec flag `FunctionMetrics.truncated` quand on coupe avant la fin. ADC via `google-auth-library` (import dynamique depuis `optionalDependencies`, scope `script.processes`) ; `getAccessToken` injectable pour les tests (mock server). Résolution `scriptId` (`src/script-id.ts`) : lit `.clasp.json` à la racine projet par défaut, supporte les overrides CLI `--script-id` (mono-projet) et `--script-id-map <json>` (workspace). Activation : `gaslens prod-truth --use-apps-script-api`.
+
+Strictement hors hook chaud (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`).
 
 À construire (détail + intérêt dans V3) :
-- `prod-truth` phase 2 (V3 §22.2, auth Google) : impl `MetricsProvider` via `projects.getMetrics` + `processes.list`, fenêtres glissantes, mémorisation.
 - `deploy-aware` (V3 §22.3).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
 - Étendre `GAS_API_DEPRECATED` au fil des observations terrain (Ui.showDialog + ScriptProperties/UserProperties demandent d'ajouter les roots Ui/ScriptProperties au registre GAS_API).
