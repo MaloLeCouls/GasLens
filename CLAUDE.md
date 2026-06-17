@@ -69,6 +69,8 @@ src/
   fetchers/apps-script-api.ts  fetcher Apps Script API (projects.getContent, ADC + fetch natif ; V3 §22.1 phase 2)
   fetchers/lib-cache.ts        cache disque scannable pour LibraryFetcher (V3 §22.1 phase 3) ; --refresh, readOnly
   providers/apps-script-metrics.ts  provider MetricsProvider via processes:listScriptProcesses (V3 §22.2 phase 2) ; pagination + agrégation par function_name + cache mémoire
+  providers/apps-script-deployments.ts  provider DeploymentsProvider via projects.deployments + projects.versions (V3 §22.3) ; pagination + cache mémoire par scriptId
+  deploy-aware.ts              conscience des déploiements (V3 §22.3) ; live_web_app / live_addon / live_api / head_only ; version drift detection
   script-id.ts                 résolution du scriptId par projet : .clasp.json à la racine + overrides CLI
   mcp-server.ts                serveur MCP stdio (V3 §24) — 4 outils consolidés (map/inspect/impact/check) ; bin/gaslens-mcp.js launcher
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
@@ -126,7 +128,7 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
 
 **Ergonomie LLM (V3 §24 + extensions)** :
 - `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.
@@ -166,10 +168,12 @@ Production de `advice` actionnables. Optionnel, **strictement hors hook chaud** 
 
 Strictement hors hook chaud (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`).
 
+`deploy-aware` (V3 §22.3) — Phase 1 livrée : croise les expositions statiques (`doGet`/`doPost`/`onOpen`/`onInstall`/…) avec `projects.deployments.list` et `projects.versions.list` pour annoter chaque fonction d'un `deployment_status` parmi `live_web_app` / `live_addon` / `live_api` / `head_only` / `unknown`. Priorité décroissante (web_app > addon > api > head_only) — la sévérité de l'alerte décroît dans l'ordre. **Interface `DeploymentsProvider` pluggable** (default `NoopDeploymentsProvider`, idem doctrine §22). `createAppsScriptDeploymentsProvider` (`src/providers/apps-script-deployments.ts`) implémente la lecture API avec scope `script.deployments.readonly` (ADC, import dynamique). Détection de **version drift** : si un déploiement live pointe sur une version antérieure à `max(versions.versionNumber)`, le rapport signale l'écart — utile pour distinguer « code édité en HEAD non poussé en prod » de « code édité ET déployé ». scriptId résolu via `script-id.ts` (`.clasp.json` ou overrides CLI). Activation : `gaslens deploy-aware --use-apps-script-api`. Strictement consultatif, hors hook chaud.
+
 À construire (détail + intérêt dans V3) :
-- `deploy-aware` (V3 §22.3).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
 - Étendre `GAS_API_DEPRECATED` au fil des observations terrain (Ui.showDialog + ScriptProperties/UserProperties demandent d'ajouter les roots Ui/ScriptProperties au registre GAS_API).
+- `deploy-aware` phase 2 (futur) : récupérer le contenu d'une version déployée via `projects.getContent?versionNumber=X` et le comparer au HEAD pour confirmer/infirmer la dérive au niveau code (pas seulement au niveau numéro de version).
 
 ---
 

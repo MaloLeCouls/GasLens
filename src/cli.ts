@@ -34,6 +34,7 @@ import {
   renderResolveLiveText,
 } from './resolve-live.js';
 import { analyzeProdTruth, renderProdTruthText } from './prod-truth.js';
+import { analyzeDeployments, renderDeployAwareText } from './deploy-aware.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -753,6 +754,113 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     });
 
   program
+    .command('deploy-aware')
+    .description(
+      "Conscience des déploiements (V3 §22.3) : croise les expositions statiques " +
+        "(doGet, doPost, onOpen, …) avec `projects.deployments` pour annoter les " +
+        "fonctions servant un déploiement actif (`live_web_app` / `live_addon` / " +
+        "`live_api` / `head_only` / `unknown`). Consultatif, jamais bloquant. " +
+        "Par défaut : DeploymentsProvider no-op → tout en `unknown`. Avec " +
+        "--use-apps-script-api : lit `projects.deployments` + `projects.versions` " +
+        "(ADC requis, scope script.deployments.readonly).",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Filtrer le rapport sur un projet du workspace")
+    .option(
+      '--use-apps-script-api',
+      "Active le provider Apps Script API (ADC requis : `gcloud auth application-default login`). " +
+        "Strictement hors hook chaud — V3 §22.3.",
+      false,
+    )
+    .option(
+      '--script-id <id>',
+      "scriptId du projet (mono-projet). Sinon : lecture automatique de <root>/.clasp.json.",
+    )
+    .option(
+      '--script-id-map <json>',
+      "Map projet → scriptId au format JSON (workspace). Ex : '{\"AppA\":\"sid-a\",\"AppB\":\"sid-b\"}'.",
+    )
+    .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .action(async (opts: DeployAwareCliOpts) => {
+      const idxPath = resolve(opts.indexPath);
+      if (!existsSync(idxPath)) {
+        process.stderr.write(
+          `gaslens deploy-aware: index introuvable à ${idxPath}. Lance 'gaslens scan'.\n`,
+        );
+        process.exit(2);
+      }
+      let raw: ProjectIndex | WorkspaceIndex;
+      try {
+        raw = JSON.parse(await readFile(idxPath, 'utf8')) as
+          | ProjectIndex
+          | WorkspaceIndex;
+      } catch (err) {
+        process.stderr.write(
+          `gaslens deploy-aware: index illisible — ${(err as Error).message}.\n`,
+        );
+        process.exit(2);
+      }
+      await warnIfStale(raw, idxPath);
+
+      let provider: import('./deploy-aware.js').DeploymentsProvider | undefined;
+      let script_id_by_project: Map<string, string> | undefined;
+      if (opts.useAppsScriptApi) {
+        try {
+          const mod = await import('./providers/apps-script-deployments.js');
+          provider = await mod.createAppsScriptDeploymentsProvider();
+        } catch (err) {
+          process.stderr.write(
+            `gaslens deploy-aware: impossible d'initialiser le provider Apps Script API — ` +
+              `${(err as Error).message}\n`,
+          );
+          process.exit(2);
+        }
+        const overrides = parseScriptIdOverrides(
+          raw,
+          opts.scriptId,
+          opts.scriptIdMap,
+        );
+        const { buildScriptIdMap } = await import('./script-id.js');
+        script_id_by_project = await buildScriptIdMap(raw, overrides);
+        if (script_id_by_project.size === 0) {
+          process.stderr.write(
+            `gaslens deploy-aware: --use-apps-script-api actif mais aucun scriptId connu. ` +
+              `Renseigne --script-id <id> (mono-projet) ou --script-id-map <json>, ` +
+              `ou ajoute un .clasp.json à la racine du projet.\n`,
+          );
+        }
+      }
+
+      const report = await analyzeDeployments(raw, provider, {
+        ...(script_id_by_project ? { script_id_by_project } : {}),
+      });
+      // Filtre --project.
+      if (opts.project) {
+        const projects = report.projects.filter((p) => p.project === opts.project);
+        const function_annotations = report.function_annotations.filter(
+          (a) => a.project === opts.project,
+        );
+        if (projects.length === 0) {
+          process.stderr.write(
+            `gaslens deploy-aware: --project '${opts.project}' n'a aucune fonction indexée.\n`,
+          );
+        }
+        const filtered = { ...report, projects, function_annotations };
+        if (opts.format === 'text') {
+          process.stdout.write(renderDeployAwareText(filtered) + '\n');
+        } else {
+          process.stdout.write(jsonOut(filtered, opts.compact) + '\n');
+        }
+      } else if (opts.format === 'text') {
+        process.stdout.write(renderDeployAwareText(report) + '\n');
+      } else {
+        process.stdout.write(jsonOut(report, opts.compact) + '\n');
+      }
+      process.exit(0);
+    });
+
+  program
     .command('inspect')
     .description(
       "Renvoie ce qu'il faut savoir sur une fonction avant de la modifier : " +
@@ -1339,6 +1447,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
+  { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
   { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
@@ -1549,6 +1658,16 @@ interface ProdTruthCliOpts {
   scriptId?: string;
   scriptIdMap?: string;
   maxPages: string;
+  format: string;
+  compact: boolean;
+}
+
+interface DeployAwareCliOpts {
+  indexPath: string;
+  project?: string;
+  useAppsScriptApi: boolean;
+  scriptId?: string;
+  scriptIdMap?: string;
   format: string;
   compact: boolean;
 }

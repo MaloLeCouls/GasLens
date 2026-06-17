@@ -80,6 +80,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens lint-webapp` | `mixed_content` / `link_target` / `form_submit` sur les `.html` servis |
 | `gaslens resolve-live` | Inventaire des libs (`local` / `external_*` / `declared_unused`). Cache disque + `--use-apps-script-api` + `--enrich-output` pour fusionner les libs dans le WorkspaceIndex |
 | `gaslens prod-truth` | Croise expositions × métriques prod (`confirmed_dead` / `errored` / `dispatched_dynamic`). `--use-apps-script-api` agrège `processes:listScriptProcesses` |
+| `gaslens deploy-aware` | Conscience des déploiements (`live_web_app` / `live_addon` / `live_api` / `head_only`). `--use-apps-script-api` lit `projects.deployments` + `projects.versions` |
 | `gaslens emit-dts` | `.d.ts` pour `google.script.run` côté client (pont vers `tsc`) |
 | `gaslens emit-contract-tests` | Harnais `.gs` de test de contrat (sandbox uniquement — effets de bord réels) |
 | `gaslens commands` | Liste compacte des commandes (utile pour un agent qui découvre l'outil) |
@@ -237,6 +238,23 @@ gaslens prod-truth --use-apps-script-api --script-id-map '{"AppA":"sid-a","AppB"
 
 Sortie : `confirmed_dead` / `dispatched_dynamic` / `cold_exposed` / `errored` / `live` / `unknown` par fonction, avec advice actionnables. Jamais bloquant — consultatif uniquement.
 
+### Conscience des déploiements (V3 §22.3)
+
+Pour savoir si `doGet` sert une web app live **en ce moment** (et donc qu'éditer sa signature est critique immédiat) :
+
+```bash
+# Audit local — tout en 'unknown' (inventaire de la surface).
+gaslens deploy-aware --index-path ./.gaslens/index.json
+
+# Branche le provider Apps Script API (scope `script.deployments.readonly`).
+gaslens deploy-aware --use-apps-script-api
+
+# Workspace : map projet → scriptId explicite (override .clasp.json).
+gaslens deploy-aware --use-apps-script-api --script-id-map '{"AppA":"sid-a"}'
+```
+
+Sortie : annotations `live_web_app` / `live_addon` / `live_api` / `head_only` / `unknown` par fonction, plus détection de **version drift** (un déploiement live qui pointe sur une version antérieure à la dernière publiée — utile pour distinguer « édité en HEAD » de « édité + déployé »). Strictement consultatif, jamais bloquant.
+
 ---
 
 ## Performance
@@ -271,7 +289,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 321 tests
+npm test            # vitest run — 335 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```
