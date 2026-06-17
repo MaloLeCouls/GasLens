@@ -78,6 +78,8 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens validate-api` | Méthodes GAS hallucinées + arity manquante + méthodes dépréciées |
 | `gaslens lint-runtime` | Anti-patterns quota/lock/trigger (warn/info) |
 | `gaslens lint-webapp` | `mixed_content` / `link_target` / `form_submit` sur les `.html` servis |
+| `gaslens resolve-live` | Inventaire des libs (`local` / `external_*` / `declared_unused`). Cache disque + `--use-apps-script-api` + `--enrich-output` pour fusionner les libs dans le WorkspaceIndex |
+| `gaslens prod-truth` | Croise expositions × métriques prod (skeleton — `MetricsProvider` pluggable) |
 | `gaslens emit-dts` | `.d.ts` pour `google.script.run` côté client (pont vers `tsc`) |
 | `gaslens emit-contract-tests` | Harnais `.gs` de test de contrat (sandbox uniquement — effets de bord réels) |
 | `gaslens commands` | Liste compacte des commandes (utile pour un agent qui découvre l'outil) |
@@ -195,6 +197,28 @@ Les appels `CommonUtils.formatDate(...)` depuis `AppA` sont résolus vers la fon
 
 Pour cibler un sous-projet : `--project <nom>` sur les commandes consommatrices.
 
+### Librairies externes (V3 §22.1)
+
+Quand une lib n'est pas dans le workspace (ex: `OAuth2` mainteint hors-monorepo) :
+
+```bash
+# Audit local — inventaire honnête sans réseau.
+gaslens resolve-live --index-path ./.gaslens/index.json
+
+# Récupère la source via Apps Script API (ADC : `gcloud auth application-default login`).
+gaslens resolve-live --use-apps-script-api
+
+# Cache disque (`.gaslens/lib-cache/<scriptId>/<version>/`) actif par défaut :
+# les runs suivants servent depuis le cache, sans réseau.
+gaslens resolve-live --refresh           # force le re-fetch
+gaslens resolve-live --no-cache          # désactive lecture+écriture
+
+# Enrichit le WorkspaceIndex avec les libs récupérées, exploitable par impact/check.
+gaslens resolve-live --use-apps-script-api --enrich-output ./.gaslens/index.enriched.json
+```
+
+Strictement opt-in, **hors hook chaud** — la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`.
+
 ---
 
 ## Performance
@@ -229,7 +253,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 257 tests
+npm test            # vitest run — 306 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```

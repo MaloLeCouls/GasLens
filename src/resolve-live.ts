@@ -75,6 +75,20 @@ export interface ResolvedLibrary {
   fetch_error?: string;
 }
 
+/**
+ * Source d'une lib externe effectivement récupérée pendant le run. Substrat
+ * de l'enrichissement workspace (V3 §22.1 phase 3) : indexée comme un projet
+ * supplémentaire, nommée d'après le `user_symbol` du consommateur.
+ */
+export interface FetchedLibrarySource {
+  /** Projet consommateur — détermine le `user_symbol` à utiliser. */
+  consumer_project: string;
+  user_symbol: string;
+  library_id: string;
+  version: string;
+  source: LibrarySource;
+}
+
 export interface ResolveLiveReport {
   scanned_at: string;
   scope: 'project' | 'workspace';
@@ -89,6 +103,13 @@ export interface ResolveLiveReport {
   libraries: ResolvedLibrary[];
   /** Conseils actionnables (prêts à coller dans une session agent). */
   advice: string[];
+  /**
+   * Sources des libs externes effectivement récupérées (par le fetcher ou
+   * depuis le cache disque). Sert d'entrée à `enrichWorkspaceWithLibraries`
+   * pour matérialiser ces libs en projets et résoudre les `cross_project_edges`.
+   * Absent / vide si aucun fetcher actif.
+   */
+  fetched_sources?: FetchedLibrarySource[];
 }
 
 /**
@@ -114,6 +135,7 @@ export async function analyzeLiveLibraries(
     idx.kind === 'workspace' ? idx.projects : [idx];
 
   const libraries: ResolvedLibrary[] = [];
+  const fetched_sources: FetchedLibrarySource[] = [];
   for (const p of projects) {
     const callsByReceiver = groupReceiverUsage(p.receiver_usage);
     for (const lib of p.manifest.libraries) {
@@ -134,6 +156,13 @@ export async function analyzeLiveLibraries(
         const result = await tryFetch(fetcher, lib.library_id, lib.version);
         if (result.source) {
           status = 'external_resolved';
+          fetched_sources.push({
+            consumer_project: p.project,
+            user_symbol: lib.user_symbol,
+            library_id: lib.library_id,
+            version: lib.version,
+            source: result.source,
+          });
         } else if (result.error) {
           status = 'external_unresolvable';
           fetch_error = result.error;
@@ -157,13 +186,17 @@ export async function analyzeLiveLibraries(
   }
 
   const summary = countByStatus(libraries);
-  return {
+  const report: ResolveLiveReport = {
     scanned_at: new Date().toISOString(),
     scope: idx.kind === 'workspace' ? 'workspace' : 'project',
     summary,
     libraries,
     advice: buildAdvice(libraries, summary),
   };
+  if (fetched_sources.length > 0) {
+    report.fetched_sources = fetched_sources;
+  }
+  return report;
 }
 
 async function tryFetch(

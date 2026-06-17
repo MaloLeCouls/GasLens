@@ -1255,9 +1255,39 @@ export async function scanWorkspace(opts: {
     );
   }
 
-  const projectByName = new Map(projects.map((p) => [p.project, p]));
-  const cross_project_edges: CrossProjectEdge[] = [];
+  const cross_project_edges = resolveCrossProjectLinks(projects);
 
+  return {
+    kind: 'workspace',
+    workspace_root: opts.root,
+    scanned_at: new Date().toISOString(),
+    projects,
+    cross_project_edges,
+  };
+}
+
+/**
+ * Résout les arêtes cross-project en mutant `projects` : ajoute les
+ * `CallerInfo` cross-project et les `exposures` de type `library` sur les
+ * fonctions cibles. Idempotente : repart d'un état propre en retirant
+ * d'abord toute trace cross-project existante (utile pour l'enrichissement
+ * workspace, V3 §22.1 phase 3).
+ *
+ * Renvoie la liste des `CrossProjectEdge` produites, à coller telle quelle
+ * dans `WorkspaceIndex.cross_project_edges`.
+ */
+export function resolveCrossProjectLinks(
+  projects: ProjectIndex[],
+): CrossProjectEdge[] {
+  // Étape 1 — purger les liens cross-project existants pour repartir propre.
+  for (const p of projects) {
+    for (const fn of p.functions) {
+      fn.called_by = fn.called_by.filter((c) => c.caller_project === undefined);
+      fn.exposures = fn.exposures.filter((e) => e.type !== 'library');
+    }
+  }
+  const projectByName = new Map(projects.map((p) => [p.project, p]));
+  const edges: CrossProjectEdge[] = [];
   for (const callerProject of projects) {
     for (const pc of callerProject.pending_library_calls) {
       const targetProject = projectByName.get(pc.library_prefix);
@@ -1285,7 +1315,7 @@ export async function scanWorkspace(opts: {
         detail: `appelée depuis '${callerProject.project}' via préfixe '${pc.library_prefix}'`,
       });
 
-      cross_project_edges.push({
+      edges.push({
         caller_project: callerProject.project,
         caller_function: pc.caller_function,
         caller_file: pc.caller_file,
@@ -1296,14 +1326,7 @@ export async function scanWorkspace(opts: {
       });
     }
   }
-
-  return {
-    kind: 'workspace',
-    workspace_root: opts.root,
-    scanned_at: new Date().toISOString(),
-    projects,
-    cross_project_edges,
-  };
+  return edges;
 }
 
 async function findProjectRoots(root: string): Promise<string[]> {

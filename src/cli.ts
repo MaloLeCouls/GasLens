@@ -487,8 +487,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         "manifest.libraries × workspace × receiver_usage et classe chaque lib " +
         "en local / external_unfetched / external_resolved / external_unresolvable " +
         "/ declared_unused. Optionnel, hors hook chaud. Par défaut : audit local " +
-        "(NoopFetcher). Avec --use-apps-script-api : récupère la source via " +
-        "projects.getContent (ADC requis ; phase 2).",
+        "+ cache disque (les libs déjà cachées sont servies sans réseau). Avec " +
+        "--use-apps-script-api : récupère la source via projects.getContent " +
+        "(ADC requis ; phase 2). --enrich-output produit un WorkspaceIndex enrichi " +
+        "intégrant les libs récupérées comme projets (phase 3).",
     )
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Filtrer le rapport sur un projet du workspace")
@@ -497,6 +499,20 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       "Active le fetcher Apps Script API (ADC requis : `gcloud auth application-default login`). " +
         "Strictement hors hook chaud — V3 §22.1 phase 2.",
       false,
+    )
+    .option(
+      '--cache-dir <path>',
+      "Racine du cache disque des sources de libs. Défaut : <dossier-index>/lib-cache.",
+    )
+    .option('--no-cache', "Désactive le cache disque (lecture ET écriture).")
+    .option(
+      '--refresh',
+      "Force le re-fetch et écrase les entrées du cache disque.",
+      false,
+    )
+    .option(
+      '--enrich-output <path>',
+      "Écrit un WorkspaceIndex enrichi des libs récupérées (V3 §22.1 phase 3).",
     )
     .option('--format <fmt>', 'json | text', 'json')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
@@ -523,11 +539,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       // Branchement du fetcher : NoopFetcher par défaut, AppsScriptApiFetcher
       // si --use-apps-script-api. Import dynamique pour ne pas charger
       // google-auth-library tant qu'on ne l'utilise pas.
-      let fetcher: import('./resolve-live.js').LibraryFetcher | undefined;
+      let innerFetcher: import('./resolve-live.js').LibraryFetcher | null = null;
       if (opts.useAppsScriptApi) {
         try {
           const mod = await import('./fetchers/apps-script-api.js');
-          fetcher = await mod.createAppsScriptApiFetcher();
+          innerFetcher = await mod.createAppsScriptApiFetcher();
         } catch (err) {
           process.stderr.write(
             `gaslens resolve-live: impossible d'initialiser le fetcher Apps Script API — ` +
@@ -536,9 +552,65 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.exit(2);
         }
       }
+      // Cache disque : activé par défaut. Wrap le fetcher inner (ou agit seul
+      // en lecture si pas de --use-apps-script-api). Cohérent avec la doctrine
+      // V3 §22 : "audit local" sert d'abord ce qui est déjà connu.
+      const cacheDir = resolve(
+        opts.cacheDir ?? join(dirname(idxPath), 'lib-cache'),
+      );
+      let fetcher: import('./resolve-live.js').LibraryFetcher | undefined;
+      if (opts.cache === false) {
+        fetcher = innerFetcher ?? undefined;
+      } else {
+        const { createDiskCachedFetcher } = await import(
+          './fetchers/lib-cache.js'
+        );
+        fetcher = createDiskCachedFetcher(innerFetcher, {
+          cacheDir,
+          refresh: opts.refresh,
+        });
+      }
       // On passe l'index entier à l'analyseur (le workspace est nécessaire
       // pour détecter le statut `local`). Le filtre --project se fait après.
       const report = await analyzeLiveLibraries(raw, fetcher);
+
+      // Enrichissement workspace si demandé (V3 §22.1 phase 3).
+      let enriched_output_path: string | undefined;
+      if (opts.enrichOutput) {
+        if (!report.fetched_sources || report.fetched_sources.length === 0) {
+          process.stderr.write(
+            `gaslens resolve-live: --enrich-output ignoré — aucune librairie récupérée ` +
+              `(fetcher noop, cache vide, ou toutes les libs sont 'local' / 'declared_unused').\n`,
+          );
+        } else if (opts.cache === false) {
+          process.stderr.write(
+            `gaslens resolve-live: --enrich-output requiert le cache disque ` +
+              `(sans cache, les sources fetchées ne sont pas matérialisées).\n`,
+          );
+          process.exit(2);
+        } else {
+          const { enrichWorkspaceWithLibraries } = await import(
+            './enrich-workspace.js'
+          );
+          const enriched = await enrichWorkspaceWithLibraries(raw, {
+            cacheDir,
+            fetched_sources: report.fetched_sources,
+          });
+          const outPath = resolve(opts.enrichOutput);
+          await mkdir(dirname(outPath), { recursive: true });
+          await writeFile(
+            outPath,
+            jsonOut(enriched, opts.compact) + '\n',
+            'utf8',
+          );
+          enriched_output_path = outPath;
+          process.stderr.write(
+            `gaslens resolve-live: workspace enrichi (${enriched.projects.length} projets, ` +
+              `${enriched.cross_project_edges.length} edges) → ${outPath}\n`,
+          );
+        }
+      }
+
       const libraries = opts.project
         ? report.libraries.filter((l) => l.project === opts.project)
         : report.libraries;
@@ -547,7 +619,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           `gaslens resolve-live: --project '${opts.project}' n'a aucune librairie déclarée.\n`,
         );
       }
-      const filtered = { ...report, libraries };
+      const filtered = {
+        ...report,
+        libraries,
+        ...(enriched_output_path ? { enriched_output_path } : {}),
+      };
       if (opts.format === 'text') {
         process.stdout.write(renderResolveLiveText(filtered) + '\n');
       } else {
@@ -1206,7 +1282,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'validate-api', tldr: 'méthodes GAS hallucinées + arity manquante', reads_index: true, emits_findings: true },
   { name: 'lint-runtime', tldr: 'quota/lock/trigger anti-patterns (warn/info)', reads_index: true, emits_findings: true },
   { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
-  { name: 'resolve-live', tldr: 'inventaire libs (local/external_unfetched/declared_unused) ; hors hook chaud', reads_index: true, emits_findings: false },
+  { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (confirmed_dead / dispatched_dynamic / errored) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
@@ -1400,6 +1476,11 @@ interface ResolveLiveCliOpts {
   indexPath: string;
   project?: string;
   useAppsScriptApi: boolean;
+  cacheDir?: string;
+  /** commander injecte `false` quand --no-cache est posé ; `true` (défaut) sinon. */
+  cache: boolean;
+  refresh: boolean;
+  enrichOutput?: string;
   format: string;
   compact: boolean;
 }

@@ -63,6 +63,11 @@ src/
   gas-api.ts                   registre curé Service→Method→ReturnType pour ~15 services natifs (source: doc + @types/google-apps-script) ; couche d'arity séparée (GAS_API_ARITY) pour api.wrong_arity
   lint-runtime.ts              lint heuristique GAS-aware (V3 §21.3) : quota.value_in_loop, urlfetch.in_loop, lock.no_finally, trigger.orphan
   lint-webapp.ts               lint des .html servis (V3 §21.4) : webapp.mixed_content, webapp.link_target, webapp.form_submit
+  resolve-live.ts              inventaire des libs (V3 §22.1 phases 1+2+3) ; LibraryFetcher pluggable ; expose fetched_sources
+  enrich-workspace.ts          enrichit ProjectIndex/WorkspaceIndex avec les libs récupérées (V3 §22.1 phase 3) ; renameProject ; appelle resolveCrossProjectLinks
+  prod-truth.ts                vérité d'exécution (V3 §22.2 phase 1) ; MetricsProvider pluggable
+  fetchers/apps-script-api.ts  fetcher Apps Script API (projects.getContent, ADC + fetch natif ; V3 §22.1 phase 2)
+  fetchers/lib-cache.ts        cache disque scannable pour LibraryFetcher (V3 §22.1 phase 3) ; --refresh, readOnly
   mcp-server.ts                serveur MCP stdio (V3 §24) — 4 outils consolidés (map/inspect/impact/check) ; bin/gaslens-mcp.js launcher
   emit-dts.ts / emit-contract-tests.ts                     ponts vers tsc / tests de contrat
   eval.ts                      rejoue eval/tasks/*.json (inclut findings manifeste + validate-api via enrichWith*Findings)
@@ -146,16 +151,18 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 
 `lint-webapp` (V3 §21.4) — Phase 1 livrée (WARN, confidence high/medium) : `webapp.mixed_content` (http:// dans tags script/link/img/iframe/source/video/audio + fetch/XHR/img.src côté JS client), `webapp.link_target` (`<a href>` de navigation sans target=, silencieux si `<base target="_top">` global), `webapp.form_submit` (`<form>` avec input/button submit sans `preventDefault`/`return false`). Câblé dans `check` via `enrichWithLintWebappFindings`. **Restent** : `webapp.run_out_of_context` (vague pour V1).
 
-`resolve-live` (V3 §22.1) — Phases 1 + 2 (fetch) livrées :
+`resolve-live` (V3 §22.1) — Phases 1 + 2 + 3 livrées :
 - **Phase 1** : croise `manifest.libraries` × workspace × `receiver_usage` et classe chaque lib en `local` / `external_unfetched` / `external_resolved` / `external_unresolvable` / `declared_unused`. **Interface `LibraryFetcher` pluggable** (default `NoopFetcher` qui renvoie null — audit local sans réseau ni auth).
 - **Phase 2** : `createAppsScriptApiFetcher` (`src/fetchers/apps-script-api.ts`) implémente le fetcher via `projects.getContent` de l'API Apps Script. ADC par défaut (`google-auth-library` chargée en **import dynamique** depuis `optionalDependencies` — coût zéro tant que la commande n'est pas invoquée). 403/404 → null (frontière honnête : container-bound, scope manquant, droits absents). Cache mémoire `${scriptId}#${version}`. Activation explicite via `gaslens resolve-live --use-apps-script-api`. `getAccessToken` injectable pour les tests (in-process http.createServer + token bouchon).
+- **Phase 3** : `createDiskCachedFetcher` (`src/fetchers/lib-cache.ts`) wrap n'importe quel `LibraryFetcher` avec un cache disque scannable. Layout : `<cacheDir>/<scriptId>/<version|HEAD>/` (matérialise chaque fichier comme `.gs` / `.html` / `appsscript.json` + `__gaslens_meta.json`). Activé par défaut côté CLI ; `--no-cache` le coupe, `--refresh` force le re-fetch + écrase. Cohérent : sans `--use-apps-script-api`, le cache disque sert seul (audit local hors-ligne, lecture si déjà fetché auparavant). `enrichWorkspaceWithLibraries` (`src/enrich-workspace.ts`) consomme `ResolveLiveReport.fetched_sources`, scanne les libs matérialisées via `scanProject`, les renomme d'après leur `user_symbol` consommateur, et reéexécute `resolveCrossProjectLinks` sur l'ensemble pour produire un `WorkspaceIndex` exploitable par `impact`/`inspect`/`check`. Activation : `--enrich-output <path>`.
 
-Production de `advice` actionnables. Optionnel, **strictement hors hook chaud** (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`). **Reste** : phase 3 — cache disque (`.gaslens/lib-cache/`) avec invalidation `--refresh`, indexation à la volée des libs récupérées et fusion dans `WorkspaceIndex` pour passer la couverture multi-repos à 100 %.
+Production de `advice` actionnables. Optionnel, **strictement hors hook chaud** (la doctrine V3 §22 exige que ces capacités API ne s'invitent jamais dans `check`).
 
 `prod-truth` (V3 §22.2) — Phase 1 (skeleton) livrée : croise les expositions statiques (`exposures` + `called_by`) avec les métriques prod (`executions_count`, `error_rate`, `last_execution_at`) pour annoter chaque fonction d'un `cross_status` parmi `confirmed_dead` / `dispatched_dynamic` / `cold_exposed` / `errored` / `live` / `unknown`, et d'un `heat` parmi `hot|warm|cold|unknown`. **Interface `MetricsProvider` pluggable** (default `NoopMetricsProvider` qui renvoie `[]` — tout est alors `unknown`, et la commande sert d'inventaire de la surface à enrichir). Provider en erreur dégrade silencieusement en `unknown` (consultatif, jamais bloquant). Production d'`advice` actionnables (`NE PAS supprimer` sur dispatched_dynamic, etc.). Strictement hors hook chaud. **Reste** : phase 2 — vraie impl `MetricsProvider` via `projects.getMetrics` + `processes.list`, gestion fenêtres glissantes, mémorisation.
 
 À construire (détail + intérêt dans V3) :
-- Optionnels API phase 2 (V3 §22, auth Google) : impl `LibraryFetcher` (`resolve-live` §22.1) puis `MetricsProvider` (`prod-truth` §22.2). `deploy-aware` (§22.3) ensuite.
+- `prod-truth` phase 2 (V3 §22.2, auth Google) : impl `MetricsProvider` via `projects.getMetrics` + `processes.list`, fenêtres glissantes, mémorisation.
+- `deploy-aware` (V3 §22.3).
 - `emit-contract-tests --runner gas-fakes` (V3 §23).
 - Étendre `GAS_API_DEPRECATED` au fil des observations terrain (Ui.showDialog + ScriptProperties/UserProperties demandent d'ajouter les roots Ui/ScriptProperties au registre GAS_API).
 
