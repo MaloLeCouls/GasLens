@@ -373,6 +373,113 @@ describe('validate-api — api.deprecated', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('WARN sur SpreadsheetApp.getUi().showDialog() — suggère showModalDialog', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        return SpreadsheetApp.getUi().showDialog(HtmlService.createHtmlOutput('<p>x</p>'));
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('WARN');
+      const e = report.entries.find((x) => x.kind === 'api.deprecated');
+      expect(e?.on_type).toBe('Ui');
+      expect(e?.method).toBe('showDialog');
+      expect(e?.deprecation_replacement).toContain('showModalDialog');
+      // Pas de faux api.unknown_method (la méthode existe).
+      expect(report.entries.some((x) => x.kind === 'api.unknown_method')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('CLEAN sur Ui.showModalDialog et Ui.showModelessDialog (remplacements modernes)', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        const ui = SpreadsheetApp.getUi();
+        ui.showModalDialog(HtmlService.createHtmlOutput('x'), 'title');
+        return ui.showModelessDialog(HtmlService.createHtmlOutput('y'), 'title');
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      // Pas de finding de déprécation.
+      expect(report.entries.filter((e) => e.kind === 'api.deprecated')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("WARN sur ScriptProperties.getProperty('X') — suggère PropertiesService.getScriptProperties()", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() { return ScriptProperties.getProperty('LAST_RUN'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.verdict).toBe('WARN');
+      const e = report.entries.find((x) => x.kind === 'api.deprecated');
+      expect(e?.on_type).toBe('ScriptProperties');
+      expect(e?.method).toBe('getProperty');
+      expect(e?.deprecation_replacement).toContain('PropertiesService.getScriptProperties()');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("WARN sur ScriptProperties.setProperty (wildcard * couvre toutes les méthodes du service)", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() { ScriptProperties.setProperty('K', 'v'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      const e = report.entries.find((x) => x.kind === 'api.deprecated');
+      expect(e?.on_type).toBe('ScriptProperties');
+      expect(e?.method).toBe('setProperty');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("WARN sur UserProperties.getProperty — suggère PropertiesService.getUserProperties()", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() { return UserProperties.getProperty('id'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      const e = report.entries.find((x) => x.kind === 'api.deprecated');
+      expect(e?.on_type).toBe('UserProperties');
+      expect(e?.deprecation_replacement).toContain('PropertiesService.getUserProperties()');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("CLEAN sur PropertiesService.getScriptProperties().getProperty (forme moderne)", async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function go() {
+        return PropertiesService.getScriptProperties().getProperty('LAST_RUN');
+      }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = validateApi(idx);
+      expect(report.entries.filter((e) => e.kind === 'api.deprecated')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('validate-api — rendu texte', () => {

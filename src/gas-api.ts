@@ -48,6 +48,7 @@ export const GAS_API: GasApiRegistry = {
     newDataValidation: { returns: 'unknown' },
     newConditionalFormatRule: { returns: 'unknown' },
     newFilterCriteria: { returns: 'unknown' },
+    getUi: { returns: 'Ui' },
   },
   Spreadsheet: {
     getName: { returns: 'string' },
@@ -620,7 +621,7 @@ export const GAS_API: GasApiRegistry = {
     getActiveDocument: { returns: 'Document' },
     openById: { returns: 'Document' },
     openByUrl: { returns: 'Document' },
-    getUi: { returns: 'unknown' },
+    getUi: { returns: 'Ui' },
   },
   Document: {
     getId: { returns: 'string' },
@@ -633,6 +634,45 @@ export const GAS_API: GasApiRegistry = {
     getAs: { returns: 'Blob' },
     saveAndClose: { returns: 'void' },
     getActiveSection: { returns: 'unknown' },
+  },
+  // ─── Ui (obtenu via *.getUi()) ───────────────────────────────────────
+  // Surface utile pour suivre les chaînes `XxxApp.getUi().<méthode>()`.
+  // `showDialog` est déprécié (cf. GAS_API_DEPRECATED).
+  Ui: {
+    alert: { returns: 'unknown' },
+    prompt: { returns: 'unknown' },
+    showSidebar: { returns: 'void' },
+    showModalDialog: { returns: 'void' },
+    showModelessDialog: { returns: 'void' },
+    showDialog: { returns: 'void' },
+    createMenu: { returns: 'unknown' },
+    createAddonMenu: { returns: 'unknown' },
+    Button: { returns: 'unknown' },
+    ButtonSet: { returns: 'unknown' },
+  },
+  // ─── ScriptProperties (service top-level déprécié) ───────────────────
+  // Remplacé par PropertiesService.getScriptProperties(). Surface dupliquée
+  // de Properties pour que validate-api puisse traverser la chaîne avant
+  // de lever la déprécation `*`.
+  ScriptProperties: {
+    getProperty: { returns: 'string' },
+    setProperty: { returns: 'ScriptProperties' },
+    setProperties: { returns: 'ScriptProperties' },
+    deleteProperty: { returns: 'ScriptProperties' },
+    deleteAllProperties: { returns: 'ScriptProperties' },
+    getKeys: { returns: 'string[]' },
+    getProperties: { returns: 'unknown' },
+  },
+  // ─── UserProperties (service top-level déprécié) ─────────────────────
+  // Remplacé par PropertiesService.getUserProperties(). Idem ScriptProperties.
+  UserProperties: {
+    getProperty: { returns: 'string' },
+    setProperty: { returns: 'UserProperties' },
+    setProperties: { returns: 'UserProperties' },
+    deleteProperty: { returns: 'UserProperties' },
+    deleteAllProperties: { returns: 'UserProperties' },
+    getKeys: { returns: 'string[]' },
+    getProperties: { returns: 'unknown' },
   },
   Body: {
     appendParagraph: { returns: 'unknown' },
@@ -656,9 +696,14 @@ export const GAS_API: GasApiRegistry = {
  * Liste des types racine du registre qui correspondent à des **services
  * directement accessibles** (vs des types retournés intermédiaires).
  */
-export const GAS_API_SERVICE_ROOTS = new Set<string>(
-  Object.keys(GAS_API).filter((k) => /^(?:[A-Z][a-z]+)+(?:App|Service)$|^(?:ScriptApp|Utilities|Session|Logger|MailApp)$/.test(k)),
-);
+export const GAS_API_SERVICE_ROOTS = new Set<string>([
+  ...Object.keys(GAS_API).filter((k) => /^(?:[A-Z][a-z]+)+(?:App|Service)$|^(?:ScriptApp|Utilities|Session|Logger|MailApp)$/.test(k)),
+  // Services top-level dépréciés mais toujours présents dans des codebases
+  // legacy. Validés comme racine pour pouvoir lever api.deprecated dessus
+  // (voir GAS_API_DEPRECATED).
+  'ScriptProperties',
+  'UserProperties',
+]);
 
 /**
  * Couche d'**arity** appliquée par dessus GAS_API. Séparée pour ne pas
@@ -1024,13 +1069,42 @@ export const GAS_API_DEPRECATED: Record<
       replacement: 'user.getEmail()',
     },
   },
+  Ui: {
+    showDialog: {
+      reason:
+        "Ui.showDialog est déprécié — remplacé par Ui.showModalDialog (modal, bloque l'interaction) ou Ui.showModelessDialog (non-modal).",
+      replacement: 'ui.showModalDialog(html, title) ou ui.showModelessDialog(html, title)',
+    },
+  },
+  // Service top-level entièrement déprécié — toute méthode appelée dessus
+  // doit être migrée vers PropertiesService.getScriptProperties().<method>.
+  // `*` matche n'importe quelle méthode (cf. getMethodDeprecation).
+  ScriptProperties: {
+    '*': {
+      reason:
+        "Le service top-level ScriptProperties est déprécié — remplacé par PropertiesService.getScriptProperties() depuis l'introduction de PropertiesService (les méthodes restent identiques).",
+      replacement: 'PropertiesService.getScriptProperties().<method>(...)',
+    },
+  },
+  UserProperties: {
+    '*': {
+      reason:
+        "Le service top-level UserProperties est déprécié — remplacé par PropertiesService.getUserProperties() depuis l'introduction de PropertiesService.",
+      replacement: 'PropertiesService.getUserProperties().<method>(...)',
+    },
+  },
 };
 
+/**
+ * Récupère la déprécation d'une méthode. Supporte un wildcard `*` au niveau
+ * type pour les services entièrement dépréciés (ex: `ScriptProperties.*`
+ * → tout est déprécié, peu importe la méthode).
+ */
 export function getMethodDeprecation(
   type: string,
   method: string,
 ): { reason: string; replacement?: string } | null {
   const t = GAS_API_DEPRECATED[type];
   if (!t) return null;
-  return t[method] ?? null;
+  return t[method] ?? t['*'] ?? null;
 }

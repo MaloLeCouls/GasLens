@@ -21,6 +21,12 @@ export const GAS_BUILTIN_SERVICES = new Set<string>([
   'Session',
   'ScriptApp',
   'PropertiesService',
+  // Services top-level legacy (dépréciés au profit de PropertiesService).
+  // Les déclarer comme builtins évite que `manifest` les flag en
+  // library.undeclared ; la déprécation est levée par validate-api
+  // (consumer_kind: api.deprecated, severity: warn).
+  'ScriptProperties',
+  'UserProperties',
   'CacheService',
   'LockService',
   'Logger',

@@ -1,0 +1,16 @@
+{
+  "name": "api-deprecated-script-properties",
+  "description": "Un agent rétrograde un PropertiesService.getScriptProperties().getProperty() vers la forme legacy ScriptProperties.getProperty(). validate-api doit lever WARN api.deprecated avec suggestion 'PropertiesService.getScriptProperties()...' (V3 §21.2, registre étendu — wildcard *).",
+  "fixture": "tests/fixtures/sample-project",
+  "mutations": [
+    {
+      "file": "config.gs",
+      "before_contains": "return PropertiesService.getScriptProperties().getProperty('API_KEY');",
+      "after": "return ScriptProperties.getProperty('API_KEY');"
+    }
+  ],
+  "expected": {
+    "verdict": "WARN",
+    "warns_max": 50
+  }
+}
