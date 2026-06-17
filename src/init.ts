@@ -103,6 +103,13 @@ Quand le hook est câblé, \`gaslens check\` tourne automatiquement après chaqu
    # autres DSL : remove-param:name | rename:newName | rename-param:old=new
    \`\`\`
 
+   Si la fonction concernée est \`doGet\`/\`doPost\`/un trigger add-on et que
+   le projet est déployé en prod, double l'impact avec :
+   \`\`\`bash
+   gaslens deploy-aware --use-apps-script-api
+   \`\`\`
+   pour savoir si le déploiement live est touché immédiatement.
+
 4. **Après édition** (auto si le hook est câblé) :
    \`\`\`bash
    gaslens check --baseline ./.gaslens/baseline.json
@@ -126,10 +133,26 @@ Quand le hook est câblé, \`gaslens check\` tourne automatiquement après chaqu
 | \`lint-runtime\` | Quota/lock/trigger anti-patterns (warn/info) |
 | \`lint-webapp\` | mixed_content / link_target / form_submit (warn) |
 | \`emit-dts\` | .d.ts pour \`google.script.run\` côté client |
-| \`emit-contract-tests\` | Harnais \`.gs\` de test de contrat (sandbox uniquement) |
+| \`emit-contract-tests\` | Harnais de test de contrat. \`--runner clasp\` (.gs sandbox) ou \`--runner gas-fakes\` (.mjs local, recommandé V3 §23) |
 | \`commands\` | Liste compacte JSON de toutes les commandes |
 | \`init\` | Recettes CLAUDE.md / settings.json / skill |
 | \`eval\` | Rejoue le dataset de référence (tests d'intégration) |
+
+# Capacités optionnelles hors hook chaud (V3 §22)
+
+Ces commandes ne tournent **jamais** automatiquement dans le hook : elles
+sont opt-in, parlent à l'API Google (ADC requis) ou au cache disque, et
+peuvent prendre quelques secondes. Utilise-les explicitement quand la
+question concerne la prod ou les dépendances externes :
+
+| Commande | Quand l'invoquer |
+|---|---|
+| \`resolve-live\` | Tu veux savoir si une lib externe (\`OAuth2\`, etc.) est récupérable et comment ses appels résolvent côté lib. Le cache disque \`.gaslens/lib-cache/\` est actif par défaut ; \`--use-apps-script-api\` fetch via l'API ; \`--enrich-output\` produit un WorkspaceIndex enrichi exploitable par \`impact\`/\`check\`. |
+| \`prod-truth\` | Tu envisages de supprimer une fonction (« est-elle vraiment morte ? »), ou tu veux savoir laquelle est instable (\`errored\`). \`--use-apps-script-api\` agrège \`processes:listScriptProcesses\` par fonction. Classification : \`confirmed_dead\` / \`dispatched_dynamic\` (NE PAS supprimer) / \`cold_exposed\` / \`errored\` / \`live\`. |
+| \`deploy-aware\` | Tu vas toucher \`doGet\`/\`doPost\`/\`onOpen\` — est-ce que ça impacte un déploiement live EN CE MOMENT ? \`--use-apps-script-api\` lit \`projects.deployments\` + \`projects.versions\`. Classification : \`live_web_app\` / \`live_addon\` / \`live_api\` / \`head_only\` / \`unknown\`. |
+
+scriptId résolu automatiquement via \`<root>/.clasp.json\` (sinon
+\`--script-id <id>\` ou \`--script-id-map <json>\`).
 
 # Discipline d'honnêteté (lis ceci avant de raisonner)
 

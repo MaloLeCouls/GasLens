@@ -71,4 +71,19 @@ describe('init — recettes V2 §16', () => {
       expect(GASLENS_SKILL_MD).toContain(cmd);
     }
   });
+
+  it("Skill expose les capacités hors hook chaud V3 §22 (resolve-live / prod-truth / deploy-aware)", () => {
+    expect(GASLENS_SKILL_MD).toContain('resolve-live');
+    expect(GASLENS_SKILL_MD).toContain('prod-truth');
+    expect(GASLENS_SKILL_MD).toContain('deploy-aware');
+    // Doit être clair que ces commandes sont opt-in.
+    expect(GASLENS_SKILL_MD).toMatch(/hors hook chaud|opt-in|jamais automatiquement/i);
+    // Et la résolution scriptId via .clasp.json doit être mentionnée pour
+    // l'agent qui ne saurait pas où trouver les overrides.
+    expect(GASLENS_SKILL_MD).toContain('.clasp.json');
+  });
+
+  it("Skill mentionne --runner gas-fakes (V3 §23) pour les tests de contrat locaux", () => {
+    expect(GASLENS_SKILL_MD).toContain('gas-fakes');
+  });
 });

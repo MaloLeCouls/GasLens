@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import type { LibraryFetcher, LibrarySource } from './resolve-live.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
 /**
@@ -101,6 +103,27 @@ export interface FunctionDeploymentAnnotation {
   note: string;
 }
 
+/**
+ * Diff de contenu entre la version d'un déploiement actif et le HEAD local
+ * (V3 §22.3 phase 2). Renseignée par déploiement, uniquement quand un
+ * `LibraryFetcher` est fourni à `analyzeDeployments` (option `contentFetcher`).
+ *
+ * Granularité fichier — pas ligne à ligne. Une fois qu'on sait qu'`x.gs`
+ * diverge, l'agent peut lancer un `git diff HEAD` ou inspecter manuellement.
+ */
+export interface DeploymentContentDrift {
+  deployment_id: string;
+  version_number: number;
+  /** Présents des deux côtés mais hashes sha1 différents. */
+  files_modified: string[];
+  /** Présents en local, absents dans la version déployée. */
+  files_added_locally: string[];
+  /** Absents en local, présents dans la version déployée. */
+  files_removed_locally: string[];
+  /** Vrai si tous les fichiers sont identiques (in sync). */
+  in_sync: boolean;
+}
+
 export interface ProjectDeploymentSummary {
   project: string;
   script_id: string | null;
@@ -120,6 +143,12 @@ export interface ProjectDeploymentSummary {
     latest_version: number;
     description: string;
   }>;
+  /**
+   * Phase 2 (V3 §22.3) : comparaison du HEAD local au code de chaque
+   * déploiement actif. Renseigné uniquement quand `contentFetcher` est
+   * fourni. Une entrée par déploiement avec `version_number` non null.
+   */
+  content_drift: DeploymentContentDrift[];
   /** Erreur provider (403, 404…) si la lecture a échoué pour ce projet. */
   fetch_error: string | null;
 }
@@ -150,6 +179,15 @@ export interface AnalyzeDeployAwareOpts {
    * et marque tout en `unknown` pour ce projet.
    */
   script_id_by_project?: Map<string, string>;
+  /**
+   * Phase 2 (V3 §22.3) : si fourni, on récupère le contenu de chaque version
+   * effectivement déployée via `contentFetcher.fetch(scriptId, version)` et
+   * on compare au HEAD local (`ProjectIndex.file_hashes`). Le résultat va
+   * dans `ProjectDeploymentSummary.content_drift`. Typiquement câblé sur le
+   * fetcher Apps Script API (créé via `createAppsScriptApiFetcher`) — celui
+   * utilisé par `resolve-live`, réutilisable tel quel.
+   */
+  contentFetcher?: LibraryFetcher;
 }
 
 const ADDON_TRIGGER_NAMES = new Set([
@@ -176,6 +214,20 @@ export async function analyzeDeployments(
   for (const p of projects) {
     const scriptId = opts.script_id_by_project?.get(p.project) ?? null;
     const summary = await loadProjectSummary(provider, p, scriptId);
+    // Phase 2 : compare le HEAD local au contenu de chaque version live.
+    if (
+      opts.contentFetcher &&
+      scriptId &&
+      summary.fetch_error === null &&
+      summary.deployments.length > 0
+    ) {
+      summary.content_drift = await computeContentDrifts(
+        opts.contentFetcher,
+        scriptId,
+        summary.deployments,
+        p,
+      );
+    }
     projectSummaries.push(summary);
     for (const fn of p.functions) {
       annotations.push(annotateFunction(p, fn.name, summary));
@@ -245,8 +297,106 @@ async function loadProjectSummary(
     versions,
     latest_version_number: latestVersion,
     version_drift: drift,
+    content_drift: [],
     fetch_error,
   };
+}
+
+/**
+ * Pour chaque déploiement ayant un `version_number`, fetche le contenu de
+ * cette version via le `LibraryFetcher` et le compare au HEAD local
+ * (`ProjectIndex.file_hashes`). Granularité fichier — par hash sha1.
+ *
+ * Les déploiements HEAD/dev (version_number null) sont sautés : ils servent
+ * le contenu courant par définition.
+ *
+ * Si le fetcher renvoie `null` (403/404, container-bound, etc.) ou throw,
+ * on saute silencieusement le déploiement. Phase 2 reste consultative : une
+ * panne du fetcher de contenu ne doit pas inonder l'agent d'erreurs.
+ */
+async function computeContentDrifts(
+  fetcher: LibraryFetcher,
+  scriptId: string,
+  deployments: Deployment[],
+  p: ProjectIndex,
+): Promise<DeploymentContentDrift[]> {
+  const out: DeploymentContentDrift[] = [];
+  // Mémorise les fetches par versionNumber pour éviter les doublons quand
+  // plusieurs déploiements pointent sur la même version.
+  const cache = new Map<number, LibrarySource | null>();
+  for (const d of deployments) {
+    if (d.version_number === null) continue;
+    let remote = cache.get(d.version_number);
+    if (remote === undefined) {
+      try {
+        remote = await fetcher.fetch(scriptId, String(d.version_number));
+      } catch {
+        remote = null;
+      }
+      cache.set(d.version_number, remote);
+    }
+    if (!remote) continue;
+    out.push({
+      deployment_id: d.deployment_id,
+      version_number: d.version_number,
+      ...diffSources(p, remote),
+    });
+  }
+  return out;
+}
+
+function diffSources(
+  p: ProjectIndex,
+  remote: LibrarySource,
+): Pick<
+  DeploymentContentDrift,
+  'files_modified' | 'files_added_locally' | 'files_removed_locally' | 'in_sync'
+> {
+  const local = p.file_hashes ?? {};
+  const remoteHashes: Record<string, string> = {};
+  for (const f of remote.files) {
+    remoteHashes[remoteFilename(f)] = sha1(f.source);
+  }
+  const localPaths = new Set(Object.keys(local));
+  const remotePaths = new Set(Object.keys(remoteHashes));
+  const files_modified: string[] = [];
+  const files_added_locally: string[] = [];
+  const files_removed_locally: string[] = [];
+  for (const path of localPaths) {
+    const remoteHash = remoteHashes[path];
+    if (remoteHash === undefined) {
+      files_added_locally.push(path);
+    } else if (remoteHash !== local[path]) {
+      files_modified.push(path);
+    }
+  }
+  for (const path of remotePaths) {
+    if (!localPaths.has(path)) files_removed_locally.push(path);
+  }
+  files_modified.sort();
+  files_added_locally.sort();
+  files_removed_locally.sort();
+  return {
+    files_modified,
+    files_added_locally,
+    files_removed_locally,
+    in_sync:
+      files_modified.length === 0 &&
+      files_added_locally.length === 0 &&
+      files_removed_locally.length === 0,
+  };
+}
+
+function remoteFilename(f: LibrarySource['files'][number]): string {
+  if (f.type === 'HTML') return `${f.name}.html`;
+  if (f.type === 'JSON') {
+    return f.name === 'appsscript' ? 'appsscript.json' : `${f.name}.json`;
+  }
+  return `${f.name}.gs`;
+}
+
+function sha1(s: string): string {
+  return createHash('sha1').update(s).digest('hex');
 }
 
 function emptySummary(
@@ -261,6 +411,7 @@ function emptySummary(
     versions: [],
     latest_version_number: null,
     version_drift: [],
+    content_drift: [],
     fetch_error,
   };
 }
@@ -452,6 +603,24 @@ function buildAdvice(
           `Le déploiement live n'est pas à jour — l'agent peut éditer en HEAD sans impact immédiat sur la prod.`,
       );
     }
+    for (const cd of p.content_drift) {
+      if (cd.in_sync) continue;
+      const counts = [
+        cd.files_modified.length > 0 ? `${cd.files_modified.length} modifié(s)` : null,
+        cd.files_added_locally.length > 0
+          ? `${cd.files_added_locally.length} ajouté(s) localement`
+          : null,
+        cd.files_removed_locally.length > 0
+          ? `${cd.files_removed_locally.length} supprimé(s) localement`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      out.push(
+        `[${p.project}] content drift sur ${cd.deployment_id} (v${cd.version_number}) : ${counts}. ` +
+          `Le code servi en prod N'EST PAS le code HEAD — un push + nouvelle version sont nécessaires pour synchroniser.`,
+      );
+    }
   }
   return out;
 }
@@ -487,6 +656,27 @@ export function renderDeployAwareText(report: DeployAwareReport): string {
       lines.push(
         `        ⚠ drift : ${dr.deployment_id} sert v${dr.served_version}, latest=v${dr.latest_version}`,
       );
+    }
+    for (const cd of p.content_drift) {
+      if (cd.in_sync) {
+        lines.push(
+          `        ✓ content sync : ${cd.deployment_id} (v${cd.version_number}) identique au HEAD local`,
+        );
+      } else {
+        const parts: string[] = [];
+        if (cd.files_modified.length > 0) {
+          parts.push(`mod=[${cd.files_modified.join(',')}]`);
+        }
+        if (cd.files_added_locally.length > 0) {
+          parts.push(`local-only=[${cd.files_added_locally.join(',')}]`);
+        }
+        if (cd.files_removed_locally.length > 0) {
+          parts.push(`remote-only=[${cd.files_removed_locally.join(',')}]`);
+        }
+        lines.push(
+          `        ⚠ content drift : ${cd.deployment_id} (v${cd.version_number}) ${parts.join(' ')}`,
+        );
+      }
     }
   }
   const interesting = report.function_annotations.filter(

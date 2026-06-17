@@ -18,6 +18,7 @@ import {
   type VersionInfo,
 } from '../src/deploy-aware.js';
 import { createAppsScriptDeploymentsProvider } from '../src/providers/apps-script-deployments.js';
+import type { LibraryFetcher, LibrarySource } from '../src/resolve-live.js';
 
 interface MockHandler {
   (req: { pathname: string }, pageIndex: number): {
@@ -464,6 +465,229 @@ describe('createAppsScriptDeploymentsProvider — fetch + cache', () => {
       expect(d.map((x) => x.deployment_id)).toEqual(['d1', 'd2']);
     } finally {
       await mock.close();
+    }
+  });
+});
+
+describe('analyzeDeployments — phase 2 : content drift HEAD ↔ version live', () => {
+  function makeContentFetcher(files: LibrarySource['files']): LibraryFetcher {
+    return {
+      async fetch(_scriptId, _version) {
+        return { files };
+      },
+    };
+  }
+
+  it("in_sync = true quand le code HEAD est strictement identique à la version", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){ return ContentService.createTextOutput("hi"); }',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([webAppDeployment]);
+      const fetcher = makeContentFetcher([
+        { name: 'appsscript', source: '{}', type: 'JSON' },
+        {
+          name: 'main',
+          source: 'function doGet(){ return ContentService.createTextOutput("hi"); }',
+          type: 'SERVER_JS',
+        },
+      ]);
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      const p = report.projects[0]!;
+      expect(p.content_drift).toHaveLength(1);
+      expect(p.content_drift[0]?.in_sync).toBe(true);
+      expect(p.content_drift[0]?.files_modified).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('détecte un fichier modifié (hash différent entre HEAD et version)', async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){ return "HEAD"; }',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([webAppDeployment]);
+      const fetcher = makeContentFetcher([
+        { name: 'appsscript', source: '{}', type: 'JSON' },
+        // Version déployée : ancien code, différent du HEAD.
+        { name: 'main', source: 'function doGet(){ return "OLD"; }', type: 'SERVER_JS' },
+      ]);
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      const cd = report.projects[0]!.content_drift[0]!;
+      expect(cd.in_sync).toBe(false);
+      expect(cd.files_modified).toEqual(['main.gs']);
+      expect(cd.files_added_locally).toEqual([]);
+      expect(cd.files_removed_locally).toEqual([]);
+      // Advice émis.
+      expect(report.advice.some((a) => a.includes('content drift'))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('détecte un fichier ajouté localement (présent HEAD, absent version)', async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){}',
+      'newfile.gs': 'function newHelper(){}',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([webAppDeployment]);
+      // La version déployée ne contient PAS newfile.gs.
+      const fetcher = makeContentFetcher([
+        { name: 'appsscript', source: '{}', type: 'JSON' },
+        { name: 'main', source: 'function doGet(){}', type: 'SERVER_JS' },
+      ]);
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      const cd = report.projects[0]!.content_drift[0]!;
+      expect(cd.files_added_locally).toEqual(['newfile.gs']);
+      expect(cd.in_sync).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('détecte un fichier supprimé localement (absent HEAD, présent version)', async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){}',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([webAppDeployment]);
+      // La version déployée contient un fichier qui n'existe plus localement.
+      const fetcher = makeContentFetcher([
+        { name: 'appsscript', source: '{}', type: 'JSON' },
+        { name: 'main', source: 'function doGet(){}', type: 'SERVER_JS' },
+        { name: 'legacy', source: 'function oldThing(){}', type: 'SERVER_JS' },
+      ]);
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      const cd = report.projects[0]!.content_drift[0]!;
+      expect(cd.files_removed_locally).toEqual(['legacy.gs']);
+      expect(cd.in_sync).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('saute les déploiements HEAD/dev (version_number null)', async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){}',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([
+        { ...webAppDeployment, version_number: null },
+      ]);
+      let fetchCalled = false;
+      const fetcher: LibraryFetcher = {
+        async fetch() {
+          fetchCalled = true;
+          return { files: [] };
+        },
+      };
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      expect(fetchCalled).toBe(false);
+      expect(report.projects[0]!.content_drift).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fetcher qui throw est silencieusement dégradé (consultatif, pas bloquant)", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){}',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([webAppDeployment]);
+      const fetcher: LibraryFetcher = {
+        async fetch() {
+          throw new Error('quota exceeded');
+        },
+      };
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      expect(report.projects[0]!.content_drift).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('memoize les fetches par version_number (2 déploiements même version = 1 fetch)', async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){}',
+    });
+    try {
+      const idx = await scanProject({ root });
+      // 2 déploiements distincts pointant sur la MÊME version.
+      const provider = stubProvider([
+        { ...webAppDeployment, deployment_id: 'd-A', version_number: 7 },
+        { ...webAppDeployment, deployment_id: 'd-B', version_number: 7 },
+      ]);
+      let calls = 0;
+      const fetcher: LibraryFetcher = {
+        async fetch() {
+          calls += 1;
+          return {
+            files: [
+              { name: 'appsscript', source: '{}', type: 'JSON' },
+              { name: 'main', source: 'function doGet(){}', type: 'SERVER_JS' },
+            ],
+          };
+        },
+      };
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+        contentFetcher: fetcher,
+      });
+      expect(calls).toBe(1);
+      expect(report.projects[0]!.content_drift).toHaveLength(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("sans contentFetcher : content_drift reste vide (phase 1 préservée)", async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': 'function doGet(){}',
+    });
+    try {
+      const idx = await scanProject({ root });
+      const provider = stubProvider([webAppDeployment]);
+      const report = await analyzeDeployments(idx, provider, {
+        script_id_by_project: new Map([[idx.project, 'sid-app']]),
+      });
+      expect(report.projects[0]!.content_drift).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

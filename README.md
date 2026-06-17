@@ -253,7 +253,7 @@ gaslens deploy-aware --use-apps-script-api
 gaslens deploy-aware --use-apps-script-api --script-id-map '{"AppA":"sid-a"}'
 ```
 
-Sortie : annotations `live_web_app` / `live_addon` / `live_api` / `head_only` / `unknown` par fonction, plus détection de **version drift** (un déploiement live qui pointe sur une version antérieure à la dernière publiée — utile pour distinguer « édité en HEAD » de « édité + déployé »). Strictement consultatif, jamais bloquant.
+Sortie : annotations `live_web_app` / `live_addon` / `live_api` / `head_only` / `unknown` par fonction, **version drift** (un déploiement live qui pointe sur une version antérieure à la dernière publiée), et **content drift** (HEAD local comparé au code effectivement servi par chaque déploiement — granularité fichier par sha1). Strictement consultatif, jamais bloquant.
 
 ---
 
@@ -289,7 +289,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 347 tests
+npm test            # vitest run — 357 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```

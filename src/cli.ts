@@ -780,6 +780,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       '--script-id-map <json>',
       "Map projet → scriptId au format JSON (workspace). Ex : '{\"AppA\":\"sid-a\",\"AppB\":\"sid-b\"}'.",
     )
+    .option(
+      '--no-diff-content',
+      "Désactive la comparaison HEAD local vs code de chaque version live (V3 §22.3 phase 2 ; actif par défaut avec --use-apps-script-api).",
+    )
     .option('--format <fmt>', 'json | text', 'json')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (opts: DeployAwareCliOpts) => {
@@ -805,6 +809,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
       let provider: import('./deploy-aware.js').DeploymentsProvider | undefined;
       let script_id_by_project: Map<string, string> | undefined;
+      let contentFetcher: import('./resolve-live.js').LibraryFetcher | undefined;
       if (opts.useAppsScriptApi) {
         try {
           const mod = await import('./providers/apps-script-deployments.js');
@@ -815,6 +820,23 @@ export async function main(argv: string[] = process.argv): Promise<void> {
               `${(err as Error).message}\n`,
           );
           process.exit(2);
+        }
+        // Phase 2 (V3 §22.3) : par défaut, on branche aussi un fetcher de
+        // contenu pour comparer le HEAD local au code des versions déployées.
+        // `--no-diff-content` permet de l'opter out (réseau coupé, audit
+        // partiel, etc.).
+        if (opts.diffContent !== false) {
+          try {
+            const apiMod = await import('./fetchers/apps-script-api.js');
+            contentFetcher = await apiMod.createAppsScriptApiFetcher();
+          } catch (err) {
+            process.stderr.write(
+              `gaslens deploy-aware: impossible d'initialiser le fetcher de contenu — ` +
+                `${(err as Error).message}\n` +
+                `→ continuer sans content_drift (équivalent --no-diff-content)\n`,
+            );
+            contentFetcher = undefined;
+          }
         }
         const overrides = parseScriptIdOverrides(
           raw,
@@ -834,6 +856,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
       const report = await analyzeDeployments(raw, provider, {
         ...(script_id_by_project ? { script_id_by_project } : {}),
+        ...(contentFetcher ? { contentFetcher } : {}),
       });
       // Filtre --project.
       if (opts.project) {
@@ -1683,6 +1706,8 @@ interface DeployAwareCliOpts {
   useAppsScriptApi: boolean;
   scriptId?: string;
   scriptIdMap?: string;
+  /** commander injecte `false` quand --no-diff-content est posé ; `true` par défaut. */
+  diffContent: boolean;
   format: string;
   compact: boolean;
 }
