@@ -82,7 +82,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens prod-truth` | Croise expositions × métriques prod (`confirmed_dead` / `errored` / `dispatched_dynamic`). `--use-apps-script-api` agrège `processes:listScriptProcesses` |
 | `gaslens deploy-aware` | Conscience des déploiements (`live_web_app` / `live_addon` / `live_api` / `head_only`). `--use-apps-script-api` lit `projects.deployments` + `projects.versions` |
 | `gaslens emit-dts` | `.d.ts` pour `google.script.run` côté client (pont vers `tsc`) |
-| `gaslens emit-contract-tests` | Harnais `.gs` de test de contrat (sandbox uniquement — effets de bord réels) |
+| `gaslens emit-contract-tests` | Harnais de test de contrat. `--runner clasp` (.gs sandbox, défaut) ou `--runner gas-fakes` (.mjs exécutable localement via gas-fakes — V3 §23) |
 | `gaslens commands` | Liste compacte des commandes (utile pour un agent qui découvre l'outil) |
 | `gaslens init --section <name>` | Recettes prêtes à coller (CLAUDE.md / settings.json / SKILL.md) |
 | `gaslens hook --event post-tool-use` | Hook PostToolUse Claude Code (lit le payload sur stdin) |
@@ -289,7 +289,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 335 tests
+npm test            # vitest run — 347 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```

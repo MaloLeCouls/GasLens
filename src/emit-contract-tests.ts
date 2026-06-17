@@ -1,5 +1,23 @@
 import type { FunctionRecord, ProjectIndex } from './types.js';
 
+/**
+ * Cible d'exécution du harnais généré.
+ *
+ *  - `clasp` (défaut) : harnais `.gs` à déployer dans un projet GAS sandbox.
+ *    Exécution dans le cloud Google avec EFFETS DE BORD RÉELS (emails,
+ *    écritures Sheets, quota OAuth). Bonne pour valider l'intégration avec
+ *    les vraies API mais lent et risqué.
+ *
+ *  - `gas-fakes` (V3 §23) : harnais `.js` exécutable en local sur Node via
+ *    [gas-fakes](https://github.com/brucemcpherson/gas-fakes). gas-fakes
+ *    traduit les appels GAS vers les vraies API Google, mais le code Node
+ *    s'exécute localement — boucle save & refresh quasi instantanée, et le
+ *    mode `vm` permet une sandbox sans permissions. C'est désormais la cible
+ *    de premier choix pour les tests de contrat (cf. doctrine V3 §23
+ *    « Amendement au V2 §12 »).
+ */
+export type ContractTestRunner = 'clasp' | 'gas-fakes';
+
 export interface EmitContractTestsOptions {
   /**
    * Si true, génère un test pour CHAQUE fonction publique. Par défaut, on ne
@@ -7,6 +25,8 @@ export interface EmitContractTestsOptions {
    * vide (= au moins un consommateur connu lit un champ → on a un assert utile).
    */
   include_all_public: boolean;
+  /** Cible d'exécution — défaut `clasp` (V2 §12.3 historique). */
+  runner?: ContractTestRunner;
 }
 
 /**
@@ -25,25 +45,10 @@ export function emitContractTests(
   opts: EmitContractTestsOptions = { include_all_public: false },
 ): string {
   const eligible = pickEligibleFunctions(project, opts);
+  const runner: ContractTestRunner = opts.runner ?? 'clasp';
   const lines: string[] = [];
 
-  lines.push(`/**`);
-  lines.push(` * Tests de contrat générés par \`gaslens emit-contract-tests\``);
-  lines.push(` * — projet « ${project.project} ».`);
-  lines.push(` *`);
-  lines.push(` * ⚠ À DÉPLOYER DANS UN PROJET GAS DE SANDBOX UNIQUEMENT.`);
-  lines.push(` * Ces tests appellent les fonctions serveur pour de vrai : ils peuvent`);
-  lines.push(` * envoyer des emails, écrire en feuille, consommer du quota OAuth.`);
-  lines.push(` * Ne JAMAIS pointer leur déploiement sur des données de production.`);
-  lines.push(` *`);
-  lines.push(` * Lancement :`);
-  lines.push(` *   - depuis l'éditeur GAS : exécuter \`runGaslensContractTests\``);
-  lines.push(` *   - via clasp : \`clasp run runGaslensContractTests\``);
-  lines.push(` *`);
-  lines.push(` * Chaque test marqué \`TODO\` requiert que tu remplaces les arguments`);
-  lines.push(` * \`null\` par des valeurs réalistes de ton sandbox avant exécution.`);
-  lines.push(` */`);
-  lines.push(``);
+  emitHeader(project, runner, lines);
 
   if (eligible.length === 0) {
     lines.push(`// Aucune fonction n'a de shape de retour connue (inferred_contract).`);
@@ -85,7 +90,11 @@ export function emitContractTests(
   // Runner agrégateur.
   lines.push(`/**`);
   lines.push(` * Lance tous les tests de contrat. Retourne un résumé loggé.`);
-  lines.push(` * À appeler depuis l'éditeur GAS ou via clasp run.`);
+  if (runner === 'gas-fakes') {
+    lines.push(` * Exécution locale via gas-fakes :  node ${suggestedFileName(runner)}`);
+  } else {
+    lines.push(` * À appeler depuis l'éditeur GAS ou via clasp run.`);
+  }
   lines.push(` */`);
   lines.push(`function runGaslensContractTests() {`);
   lines.push(`  var passes = 0;`);
@@ -103,7 +112,78 @@ export function emitContractTests(
   lines.push(`  return { passes: passes, failures: failures.length };`);
   lines.push(`}`);
   lines.push(``);
+  if (runner === 'gas-fakes') {
+    emitGasFakesFooter(lines);
+  }
   return lines.join('\n');
+}
+
+/**
+ * En-tête du harnais : commentaires de mise en garde + avertissement de
+ * cible. Diffère selon le runner — gas-fakes est local et sans permissions,
+ * clasp est cloud avec effets de bord réels.
+ */
+function emitHeader(
+  project: ProjectIndex,
+  runner: ContractTestRunner,
+  lines: string[],
+): void {
+  lines.push(`/**`);
+  lines.push(` * Tests de contrat générés par \`gaslens emit-contract-tests\``);
+  lines.push(` * — projet « ${project.project} », runner : ${runner}.`);
+  lines.push(` *`);
+  if (runner === 'gas-fakes') {
+    lines.push(` * Cible : exécution LOCALE via gas-fakes (V3 §23).`);
+    lines.push(` * gas-fakes traduit les appels GAS (SpreadsheetApp, GmailApp, …) vers les`);
+    lines.push(` * vraies API Google côté Node — boucle save & refresh quasi instantanée,`);
+    lines.push(` * et le mode \`vm\` permet une sandbox sans permissions.`);
+    lines.push(` *`);
+    lines.push(` * Prérequis : \`npm install gas-fakes\` (la commande d'import ci-dessous`);
+    lines.push(` * suppose le bootstrap global recommandé par la doc gas-fakes).`);
+    lines.push(` *`);
+    lines.push(` * Lancement :  node ${suggestedFileName(runner)}`);
+  } else {
+    lines.push(` * ⚠ À DÉPLOYER DANS UN PROJET GAS DE SANDBOX UNIQUEMENT.`);
+    lines.push(` * Ces tests appellent les fonctions serveur pour de vrai : ils peuvent`);
+    lines.push(` * envoyer des emails, écrire en feuille, consommer du quota OAuth.`);
+    lines.push(` * Ne JAMAIS pointer leur déploiement sur des données de production.`);
+    lines.push(` *`);
+    lines.push(` * Lancement :`);
+    lines.push(` *   - depuis l'éditeur GAS : exécuter \`runGaslensContractTests\``);
+    lines.push(` *   - via clasp : \`clasp run runGaslensContractTests\``);
+  }
+  lines.push(` *`);
+  lines.push(` * Chaque test marqué \`TODO\` requiert que tu remplaces les arguments`);
+  lines.push(` * \`null\` par des valeurs réalistes de ton sandbox avant exécution.`);
+  lines.push(` */`);
+  lines.push(``);
+  if (runner === 'gas-fakes') {
+    lines.push(`// Bootstrap gas-fakes : expose SpreadsheetApp, GmailApp, Logger, etc. en globals.`);
+    lines.push(`// Ajuster le chemin d'import si nécessaire (cf. doc gas-fakes / package.json).`);
+    lines.push(`import 'gas-fakes';`);
+    lines.push(``);
+  }
+}
+
+/**
+ * Pied du harnais gas-fakes : exécute le runner et propage le code de sortie
+ * pour intégration CI (process.exit(1) en cas d'échec, 0 en succès).
+ */
+function emitGasFakesFooter(lines: string[]): void {
+  lines.push(`// Auto-exécution : lance la batterie et propage le code de sortie pour CI.`);
+  lines.push(`try {`);
+  lines.push(`  runGaslensContractTests();`);
+  lines.push(`  process.exit(0);`);
+  lines.push(`} catch (e) {`);
+  lines.push(`  // Le runner aura déjà loggé via Logger.log ; on imprime aussi sur stderr.`);
+  lines.push(`  process.stderr.write('[gaslens] ' + (e && e.message || e) + '\\n');`);
+  lines.push(`  process.exit(1);`);
+  lines.push(`}`);
+  lines.push(``);
+}
+
+function suggestedFileName(runner: ContractTestRunner): string {
+  return runner === 'gas-fakes' ? 'gaslens-contract-tests.mjs' : 'gaslensContractTests.gs';
 }
 
 function pickEligibleFunctions(

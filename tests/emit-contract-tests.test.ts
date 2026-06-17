@@ -77,6 +77,57 @@ describe('emit-contract-tests — sélection des fonctions', () => {
   });
 });
 
+describe('emit-contract-tests — runner gas-fakes (V3 §23)', () => {
+  let gasFakesHarness: string;
+  beforeAll(() => {
+    gasFakesHarness = emitContractTests(idx, {
+      include_all_public: false,
+      runner: 'gas-fakes',
+    });
+  });
+
+  it("le header annonce explicitement le runner gas-fakes", () => {
+    expect(gasFakesHarness).toContain('runner : gas-fakes');
+    expect(gasFakesHarness).toContain('gas-fakes');
+    expect(gasFakesHarness).toContain('npm install gas-fakes');
+  });
+
+  it("inclut le bootstrap import 'gas-fakes' avant le code", () => {
+    expect(gasFakesHarness).toMatch(/import 'gas-fakes';/);
+    // L'import doit précéder la définition du helper.
+    const importIdx = gasFakesHarness.indexOf("import 'gas-fakes';");
+    const helperIdx = gasFakesHarness.indexOf('function _gaslensAssertShape_(');
+    expect(importIdx).toBeGreaterThan(-1);
+    expect(importIdx).toBeLessThan(helperIdx);
+  });
+
+  it("contient le footer auto-exécuté avec process.exit pour CI", () => {
+    expect(gasFakesHarness).toContain('runGaslensContractTests();');
+    expect(gasFakesHarness).toContain('process.exit(0)');
+    expect(gasFakesHarness).toContain('process.exit(1)');
+    expect(gasFakesHarness).toContain('process.stderr.write');
+  });
+
+  it("ne contient PAS l'avertissement SANDBOX du runner clasp (cible différente)", () => {
+    expect(gasFakesHarness).not.toContain('À DÉPLOYER DANS UN PROJET GAS DE SANDBOX');
+    expect(gasFakesHarness).not.toContain('clasp run runGaslensContractTests');
+  });
+
+  it("le runner clasp (défaut) reste inchangé en termes d'avertissement", () => {
+    expect(harness).toContain('SANDBOX');
+    expect(harness).toContain('clasp run runGaslensContractTests');
+    expect(harness).not.toContain("import 'gas-fakes';");
+    expect(harness).not.toContain('process.exit(');
+  });
+
+  it("le code généré reste syntaxiquement valide JavaScript", () => {
+    // Le harnais gas-fakes utilise des imports ESM — on parse via vm/module
+    // équivalent en plaçant l'import dans un wrapper async function.
+    const body = gasFakesHarness.replace(/^import 'gas-fakes';$/m, '// import stub');
+    expect(() => new Function(body)).not.toThrow();
+  });
+});
+
 describe('emit-contract-tests — cas vide', () => {
   it("explique quoi faire si aucune fonction n'a de contrat connu", () => {
     const stub: ProjectIndex = {

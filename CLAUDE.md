@@ -170,8 +170,11 @@ Strictement hors hook chaud (la doctrine V3 §22 exige que ces capacités API ne
 
 `deploy-aware` (V3 §22.3) — Phase 1 livrée : croise les expositions statiques (`doGet`/`doPost`/`onOpen`/`onInstall`/…) avec `projects.deployments.list` et `projects.versions.list` pour annoter chaque fonction d'un `deployment_status` parmi `live_web_app` / `live_addon` / `live_api` / `head_only` / `unknown`. Priorité décroissante (web_app > addon > api > head_only) — la sévérité de l'alerte décroît dans l'ordre. **Interface `DeploymentsProvider` pluggable** (default `NoopDeploymentsProvider`, idem doctrine §22). `createAppsScriptDeploymentsProvider` (`src/providers/apps-script-deployments.ts`) implémente la lecture API avec scope `script.deployments.readonly` (ADC, import dynamique). Détection de **version drift** : si un déploiement live pointe sur une version antérieure à `max(versions.versionNumber)`, le rapport signale l'écart — utile pour distinguer « code édité en HEAD non poussé en prod » de « code édité ET déployé ». scriptId résolu via `script-id.ts` (`.clasp.json` ou overrides CLI). Activation : `gaslens deploy-aware --use-apps-script-api`. Strictement consultatif, hors hook chaud.
 
+`emit-contract-tests` (V2 §12.3 + V3 §23) — Deux runners livrés :
+- **`clasp`** (défaut, historique) : harnais `.gs` à déployer dans un projet GAS sandbox dédié. Exécution dans le cloud Google avec effets de bord réels (emails, écritures Sheets, quota OAuth).
+- **`gas-fakes`** (V3 §23) : harnais `.mjs` exécutable LOCALEMENT via [gas-fakes](https://github.com/brucemcpherson/gas-fakes). Bootstrap `import 'gas-fakes';` en tête + footer auto-exécuté avec `process.exit(0|1)` pour intégration CI. C'est désormais la cible recommandée pour les tests de contrat (boucle save & refresh quasi instantanée, mode `vm` sandbox sans permissions). Activation : `gaslens emit-contract-tests --runner gas-fakes`.
+
 À construire (détail + intérêt dans V3) :
-- `emit-contract-tests --runner gas-fakes` (V3 §23).
 - `deploy-aware` phase 2 (futur) : récupérer le contenu d'une version déployée via `projects.getContent?versionNumber=X` et le comparer au HEAD pour confirmer/infirmer la dérive au niveau code (pas seulement au niveau numéro de version).
 
 ---

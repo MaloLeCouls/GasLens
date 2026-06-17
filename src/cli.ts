@@ -1242,14 +1242,21 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   program
     .command('emit-contract-tests')
     .description(
-      "Génère un harnais .gs (V2 §12.3) qui assert la shape de retour de chaque " +
-        "fonction publique avec un contrat connu. À déployer dans un projet GAS " +
-        "SANDBOX uniquement (effet de bord réel : emails, écritures, OAuth).",
+      "Génère un harnais (V2 §12.3, V3 §23) qui assert la shape de retour de " +
+        "chaque fonction publique avec un contrat connu. Deux cibles : `clasp` " +
+        "(harnais .gs à déployer dans un projet GAS sandbox, effets de bord réels) " +
+        "et `gas-fakes` (harnais .mjs exécutable LOCALEMENT via gas-fakes, sans " +
+        "déploiement — V3 §23, cible recommandée).",
     )
     .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
     .option('--project <name>', "Cibler un projet précis dans un index workspace")
-    .option('-o, --output <path>', "Fichier .gs de sortie ; sinon stdout")
+    .option('-o, --output <path>', "Fichier de sortie ; sinon stdout")
     .option('--include-all', "Inclut toutes les fonctions publiques (par défaut : seulement celles avec inferred_contract.return_shape)", false)
+    .option(
+      '--runner <name>',
+      "Cible d'exécution : `clasp` (harnais .gs, cloud GAS) ou `gas-fakes` (harnais .mjs, local Node)",
+      'clasp',
+    )
     .action(async (opts: EmitContractTestsCliOpts) => {
       const idxPath = resolve(opts.indexPath);
       if (!existsSync(idxPath)) {
@@ -1285,8 +1292,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         );
         process.exit(2);
       }
+      if (opts.runner !== 'clasp' && opts.runner !== 'gas-fakes') {
+        process.stderr.write(
+          `gaslens emit-contract-tests: --runner '${opts.runner}' inconnu (attendu : clasp | gas-fakes).\n`,
+        );
+        process.exit(2);
+      }
       const out = emitContractTests(project, {
         include_all_public: opts.includeAll,
+        runner: opts.runner,
       });
       if (opts.output) {
         const outPath = resolve(opts.output);
@@ -1449,7 +1463,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
-  { name: 'emit-contract-tests', tldr: 'harnais .gs de test de contrat (sandbox)', reads_index: true, emits_findings: false },
+  { name: 'emit-contract-tests', tldr: 'harnais de test de contrat (--runner clasp|gas-fakes ; gas-fakes = local Node)', reads_index: true, emits_findings: false },
   { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
   { name: 'init', tldr: 'recettes CLAUDE.md / settings.json / SKILL.md', reads_index: false, emits_findings: false },
   { name: 'eval', tldr: 'rejoue le dataset de référence', reads_index: false, emits_findings: false },
@@ -1483,6 +1497,7 @@ interface EmitContractTestsCliOpts {
   project?: string;
   output?: string;
   includeAll: boolean;
+  runner: 'clasp' | 'gas-fakes';
 }
 
 interface DiffCliOpts {
