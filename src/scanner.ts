@@ -35,6 +35,7 @@ import {
   installableTriggersFromCalls,
 } from './extract/exposures.js';
 import { readManifest } from './manifest.js';
+import { loadWorkspaceManifest } from './workspace-manifest.js';
 import { GAS_BUILTIN_SERVICES } from './gas-services.js';
 import {
   extractHtmlChunks,
@@ -65,6 +66,13 @@ import type {
 export interface ScanOptions {
   /** Racine du projet à scanner. */
   root: string;
+  /**
+   * Nom de projet à utiliser (ids `Projet::file::fn`, champ `project`). Par
+   * défaut `basename(root)`. En mode workspace (V4), `scanWorkspace` passe le
+   * **chemin relatif à la racine** (`apps/dash/dev`) pour éviter la collision
+   * de noms quand le layout est `apps/<app>/{dev,prod}` (E1).
+   */
+  projectName?: string;
   /** Si fourni, appelé avec un breakdown des timings à la fin du scan. */
   onBench?: (bench: ScanBench) => void;
   /**
@@ -114,6 +122,7 @@ interface HtmlFileBundle {
 export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
   const t0 = Date.now();
   const manifest = await readManifest(opts.root);
+  const projectName = opts.projectName ?? manifest.projectName;
   const libraryPrefixes = new Set(manifest.libraryPrefixes);
 
   const { gsFiles, htmlFiles } = await collectSourceFiles(opts.root);
@@ -283,7 +292,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
   for (const b of bundles) {
     for (const def of b.defs) {
-      const id = `${manifest.projectName}::${b.fileRel}::${def.name}`;
+      const id = `${projectName}::${b.fileRel}::${def.name}`;
       if (records.has(def.name)) {
         collisions.push({
           file: b.fileRel,
@@ -296,7 +305,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       const rec: FunctionRecord = {
         id,
         name: def.name,
-        project: manifest.projectName,
+        project: projectName,
         definition: def.definition,
         exposures: exposuresFromName(
           def.name,
@@ -750,7 +759,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
 
   const result: ProjectIndex = {
     kind: 'project',
-    project: manifest.projectName,
+    project: projectName,
     root: opts.root,
     scanned_at: new Date().toISOString(),
     files: orderedFiles,
@@ -1087,22 +1096,29 @@ async function tryIncrementalFastPath(
   ) {
     return false;
   }
-  const baselineMs = Date.parse(baseline.scanned_at);
-  if (Number.isNaN(baselineMs)) return false;
-
-  // Toutes les mtimes doivent être ≤ baselineMs.
+  // Correctness > perf : on confirme « rien n'a changé » par HASH de contenu,
+  // pas par mtime. Le mtime est non fiable juste après une écriture (sur
+  // Windows/NTFS notamment, un `stat` immédiat peut renvoyer un mtime périmé
+  // antérieur à `scanned_at`) → un changement réel serait raté et le hook
+  // signalerait CLEAN à tort. On lit les fichiers (peu coûteux pour du GAS)
+  // mais on saute le parse/extract (le coûteux) : le fast-path reste un gros
+  // gain vs full scan, et il est désormais déterministe.
+  if (!baseline.file_hashes) return false;
   const filesAbs = [
     ...gsAbs,
     ...htmlAbs,
     ...(manifestExists ? [manifestPath] : []),
   ];
   for (const abs of filesAbs) {
+    const rel =
+      abs === manifestPath ? 'appsscript.json' : toPosix(relative(root, abs));
+    let content: string;
     try {
-      const s = await stat(abs);
-      if (s.mtimeMs > baselineMs) return false;
+      content = await readFile(abs, 'utf8');
     } catch {
       return false;
     }
+    if (sha1(content) !== baseline.file_hashes[rel]) return false;
   }
   return true;
 }
@@ -1245,9 +1261,13 @@ export async function scanWorkspace(opts: {
 
   const projects: ProjectIndex[] = [];
   for (const r of projectRoots) {
+    // E1 : nommer par chemin relatif à la racine (POSIX) → `apps/dash/dev`
+    // au lieu de `dev`, sinon collision dans le layout `apps/<app>/{dev,prod}`.
+    const relName = toPosix(relative(opts.root, r));
     projects.push(
       await scanProject({
         root: r,
+        projectName: relName || undefined,
         onBench: opts.onBench,
         incrementalBaseline: pickProjectBaseline(r),
         onIncrementalHit: opts.onIncrementalHit,
@@ -1255,7 +1275,11 @@ export async function scanWorkspace(opts: {
     );
   }
 
-  const cross_project_edges = resolveCrossProjectLinks(projects);
+  // E2 : le manifeste maître mappe `library_prefix` → projet fournisseur,
+  // ce qui résout les appels `Lib.fn()` inter-repos (la lib partagée n'est pas
+  // nommée comme son préfixe). No-op si pas de manifeste.
+  const providers = await loadLibraryProviders(opts.root);
+  const cross_project_edges = resolveCrossProjectLinks(projects, providers);
 
   return {
     kind: 'workspace',
@@ -1276,8 +1300,37 @@ export async function scanWorkspace(opts: {
  * Renvoie la liste des `CrossProjectEdge` produites, à coller telle quelle
  * dans `WorkspaceIndex.cross_project_edges`.
  */
+/**
+ * Carte `library_prefix` → (env → nom de projet fournisseur), dérivée du
+ * manifeste maître (E2). Permet de résoudre un appel `Core.fn()` vers le projet
+ * `apps/core/<env>` même si ce projet n'est pas *nommé* `Core`.
+ */
+export interface LibraryProviders {
+  byPrefix: Map<string, Map<string, string>>;
+}
+
+/** Charge la carte des fournisseurs de librairie depuis `gaslens.workspace.json`. */
+export async function loadLibraryProviders(
+  root: string,
+): Promise<LibraryProviders | undefined> {
+  const loaded = await loadWorkspaceManifest(root);
+  if (!loaded.manifest) return undefined;
+  const byPrefix = new Map<string, Map<string, string>>();
+  for (const app of loaded.manifest.apps) {
+    if (!app.library_prefix) continue;
+    const envMap = byPrefix.get(app.library_prefix) ?? new Map<string, string>();
+    for (const [env, ref] of Object.entries(app.projects)) {
+      if (!ref?.clasp_path) continue;
+      envMap.set(env, toPosix(ref.clasp_path));
+    }
+    if (envMap.size > 0) byPrefix.set(app.library_prefix, envMap);
+  }
+  return byPrefix.size > 0 ? { byPrefix } : undefined;
+}
+
 export function resolveCrossProjectLinks(
   projects: ProjectIndex[],
+  providers?: LibraryProviders,
 ): CrossProjectEdge[] {
   // Étape 1 — purger les liens cross-project existants pour repartir propre.
   for (const p of projects) {
@@ -1290,7 +1343,12 @@ export function resolveCrossProjectLinks(
   const edges: CrossProjectEdge[] = [];
   for (const callerProject of projects) {
     for (const pc of callerProject.pending_library_calls) {
-      const targetProject = projectByName.get(pc.library_prefix);
+      // 1) Match direct par nom (monorepo plat : projet nommé comme le préfixe).
+      // 2) Sinon, via le manifeste maître (E2), env-aware : un consommateur
+      //    `dev` se lie au fournisseur `dev`.
+      const targetProject =
+        projectByName.get(pc.library_prefix) ??
+        resolveViaProviders(pc.library_prefix, callerProject.project, providers, projectByName);
       if (!targetProject) continue;
       const targetFn = targetProject.functions.find(
         (f) => f.name === pc.method,
@@ -1327,6 +1385,29 @@ export function resolveCrossProjectLinks(
     }
   }
   return edges;
+}
+
+/**
+ * Résout un préfixe de librairie via le manifeste maître (E2). Choisit le
+ * projet fournisseur du **même environnement** que l'appelant (dernier segment
+ * du nom de projet), avec repli sur `dev` (HEAD) puis `prod`.
+ */
+function resolveViaProviders(
+  prefix: string,
+  callerProjectName: string,
+  providers: LibraryProviders | undefined,
+  projectByName: Map<string, ProjectIndex>,
+): ProjectIndex | undefined {
+  if (!providers) return undefined;
+  const envMap = providers.byPrefix.get(prefix);
+  if (!envMap) return undefined;
+  const callerEnv = callerProjectName.split('/').pop() ?? callerProjectName;
+  const providerName =
+    envMap.get(callerEnv) ??
+    envMap.get('dev') ??
+    envMap.get('prod') ??
+    [...envMap.values()][0];
+  return providerName ? projectByName.get(providerName) : undefined;
 }
 
 async function findProjectRoots(root: string): Promise<string[]> {

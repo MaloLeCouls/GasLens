@@ -40,16 +40,16 @@ describe('incremental scan — fast-path', () => {
     }
   });
 
-  it('quitte le fast-path quand une source a été modifiée (mtime > scanned_at)', async () => {
+  it('quitte le fast-path quand le CONTENU d\'une source a changé (détection par hash)', async () => {
     const root = await makeProject({
       'appsscript.json': '{}',
       'main.gs': `function go() { return 1; }`,
     });
     try {
       const baseline = await scanProject({ root });
-      // Avance la mtime du fichier après le scan.
-      const future = new Date(Date.parse(baseline.scanned_at) + 60_000);
-      await utimes(join(root, 'main.gs'), future, future);
+      // Change le CONTENU → hash différent. La détection est par hash (et non
+      // par mtime, non fiable juste après une écriture sur certains OS/FS).
+      await writeFile(join(root, 'main.gs'), `function go() { return 2; }`, 'utf8');
 
       let fastHit = false;
       const incr = await scanProject({
@@ -59,10 +59,35 @@ describe('incremental scan — fast-path', () => {
           if (info.reason === 'no_change_since_baseline') fastHit = true;
         },
       });
-      // Fast-path PAS pris (puisqu'une source a une mtime ≥ scanned_at) ;
-      // le chemin partial_per_file peut, lui, être pris (et c'est correct).
-      expect(fastHit).toBe(false);
+      expect(fastHit).toBe(false); // contenu changé → fast-path bail
       expect(incr.functions.length).toBe(baseline.functions.length);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('un touch (mtime avancé, contenu identique) RESTE dans le fast-path', async () => {
+    const root = await makeProject({
+      'appsscript.json': '{}',
+      'main.gs': `function go() { return 1; }`,
+    });
+    try {
+      const baseline = await scanProject({ root });
+      // touch : on avance la mtime SANS toucher au contenu.
+      const future = new Date(Date.parse(baseline.scanned_at) + 60_000);
+      await utimes(join(root, 'main.gs'), future, future);
+
+      let fastHit = false;
+      await scanProject({
+        root,
+        incrementalBaseline: baseline,
+        onIncrementalHit: (info) => {
+          if (info.reason === 'no_change_since_baseline') fastHit = true;
+        },
+      });
+      // Contenu identique (même hash) → pas de re-scan inutile. C'est le gain
+      // de la détection par hash vs mtime.
+      expect(fastHit).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
