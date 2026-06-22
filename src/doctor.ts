@@ -11,10 +11,14 @@
  * actionnables ; eux seuls cassent le silence de `--quiet-when-ok`.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, delimiter } from 'node:path';
-import { loadWorkspaceManifest } from './workspace-manifest.js';
+import {
+  loadWorkspaceManifest,
+  type WorkspaceManifest,
+  type LoadWorkspaceManifestResult,
+} from './workspace-manifest.js';
 
 export type CheckStatus = 'ok' | 'error' | 'warn' | 'info' | 'manual';
 
@@ -43,8 +47,12 @@ export interface DoctorOptions {
   which?: (cmd: string) => boolean;
   /** Override du test de présence de fichier (test). */
   fileExists?: (path: string) => boolean;
+  /** Override de lecture de fichier (test) ; renvoie null si illisible. */
+  readText?: (path: string) => string | null;
   /** Override du home (test). */
   home?: string;
+  /** Override des variables d'environnement pertinentes (test). */
+  env?: Record<string, string | undefined>;
 }
 
 const MIN_NODE_MAJOR = 22;
@@ -52,7 +60,9 @@ const MIN_NODE_MAJOR = 22;
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   const which = opts.which ?? whichSync;
   const fileExists = opts.fileExists ?? existsSync;
+  const readText = opts.readText ?? defaultReadText;
   const home = opts.home ?? homedir();
+  const env = opts.env ?? process.env;
   const checks: DoctorCheck[] = [];
 
   // 1. Node >= 22 (requis par chrome-devtools-mcp).
@@ -94,6 +104,10 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     ),
   );
 
+  // 4bis. ADC (Application Default Credentials) — requis par les commandes
+  // opt-in qui parlent à l'API Apps Script (resolve-live/prod-truth/deploy-aware).
+  checks.push(checkAdc(fileExists, home, env));
+
   // 5. Chrome remote-debugging — non vérifiable hors-ligne de façon fiable.
   checks.push(
     mk(
@@ -105,12 +119,19 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     ),
   );
 
-  // 6. plugin gaslens activé (skills/hooks/commands).
-  checks.push(checkPluginEnabled(opts.cwd, fileExists));
+  // 6. plugin gaslens réellement déclaré (pas juste le fichier présent).
+  checks.push(checkPluginEnabled(opts.cwd, fileExists, readText));
 
   // 7. manifeste maître + index présents (socle d'analyse).
-  checks.push(await checkWorkspaceManifest(opts.cwd));
+  const loaded = await loadWorkspaceManifest(opts.cwd);
+  checks.push(checkWorkspaceManifest(loaded));
   checks.push(checkIndex(opts.cwd, fileExists));
+
+  // 8. Vérifications par app (seulement si le manifeste maître décrit un parc).
+  if (loaded.manifest && loaded.manifest.apps.length > 0) {
+    checks.push(checkClaspConfig(opts.cwd, loaded.manifest, fileExists, readText));
+    checks.push(checkBaselines(opts.cwd, loaded.manifest, fileExists));
+  }
 
   const hasError = checks.some((c) => c.status === 'error');
   const hasWarn = checks.some((c) => c.status === 'warn');
@@ -136,7 +157,11 @@ function checkNode(version: string): DoctorCheck {
   );
 }
 
-function checkPluginEnabled(cwd: string, fileExists: (p: string) => boolean): DoctorCheck {
+function checkPluginEnabled(
+  cwd: string,
+  fileExists: (p: string) => boolean,
+  readText: (p: string) => string | null,
+): DoctorCheck {
   const settingsPath = join(cwd, '.claude', 'settings.json');
   if (!fileExists(settingsPath)) {
     return mk(
@@ -147,16 +172,29 @@ function checkPluginEnabled(cwd: string, fileExists: (p: string) => boolean): Do
       '/plugin install gaslens@gaslens (ou gaslens workspace init)',
     );
   }
-  return mk(
-    'plugin-enabled',
-    'plugin gaslens activé',
-    'ok',
-    '.claude/settings.json présent',
-  );
+  // Vérifie que le plugin est réellement DÉCLARÉ, pas juste que le fichier existe.
+  const raw = readText(settingsPath);
+  let enabled: unknown;
+  try {
+    enabled = raw ? (JSON.parse(raw) as { enabledPlugins?: unknown }).enabledPlugins : undefined;
+  } catch {
+    return mk('plugin-enabled', 'plugin gaslens activé', 'warn', '.claude/settings.json illisible (JSON invalide)', 'corriger le JSON');
+  }
+  const declared =
+    Array.isArray(enabled) && enabled.some((e) => typeof e === 'string' && e.includes('gaslens'));
+  if (!declared) {
+    return mk(
+      'plugin-enabled',
+      'plugin gaslens activé',
+      'warn',
+      '.claude/settings.json présent mais ne déclare pas le plugin gaslens dans enabledPlugins',
+      'ajouter "gaslens@gaslens" à enabledPlugins (ou relancer gaslens workspace init)',
+    );
+  }
+  return mk('plugin-enabled', 'plugin gaslens activé', 'ok', 'déclaré dans .claude/settings.json');
 }
 
-async function checkWorkspaceManifest(cwd: string): Promise<DoctorCheck> {
-  const loaded = await loadWorkspaceManifest(cwd);
+function checkWorkspaceManifest(loaded: LoadWorkspaceManifestResult): DoctorCheck {
   if (!loaded.found) {
     return mk(
       'workspace-manifest',
@@ -187,6 +225,124 @@ function checkIndex(cwd: string, fileExists: (p: string) => boolean): DoctorChec
     return mk('index', 'index gaslens', 'ok', '.gaslens/index.json (ou baseline.json) présent');
   }
   return mk('index', 'index gaslens', 'info', 'pas encore d\'index', 'gaslens scan .');
+}
+
+function checkAdc(
+  fileExists: (p: string) => boolean,
+  home: string,
+  env: Record<string, string | undefined>,
+): DoctorCheck {
+  const explicit = env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (explicit && fileExists(explicit)) {
+    return mk('adc', 'Application Default Credentials', 'ok', 'GOOGLE_APPLICATION_CREDENTIALS défini');
+  }
+  const wellKnown =
+    process.platform === 'win32'
+      ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'gcloud', 'application_default_credentials.json')
+      : join(home, '.config', 'gcloud', 'application_default_credentials.json');
+  if (fileExists(wellKnown)) {
+    return mk('adc', 'Application Default Credentials', 'ok', 'ADC présent (gcloud)');
+  }
+  return mk(
+    'adc',
+    'Application Default Credentials',
+    'info',
+    'ADC absent — requis seulement par resolve-live / prod-truth / deploy-aware (API Apps Script)',
+    'gcloud auth application-default login',
+  );
+}
+
+/** Cohérence `.clasp.json` ↔ `script_id` du manifeste, par projet (E3). */
+function checkClaspConfig(
+  cwd: string,
+  manifest: WorkspaceManifest,
+  fileExists: (p: string) => boolean,
+  readText: (p: string) => string | null,
+): DoctorCheck {
+  const mismatches: string[] = [];
+  let missing = 0;
+  let checked = 0;
+  for (const app of manifest.apps) {
+    for (const [envName, ref] of Object.entries(app.projects)) {
+      if (!ref?.clasp_path) continue;
+      checked++;
+      const claspPath = join(cwd, ref.clasp_path, '.clasp.json');
+      if (!fileExists(claspPath)) {
+        missing++;
+        continue;
+      }
+      const raw = readText(claspPath);
+      let scriptId: string | undefined;
+      try {
+        scriptId = raw ? (JSON.parse(raw) as { scriptId?: string }).scriptId : undefined;
+      } catch {
+        scriptId = undefined;
+      }
+      if (scriptId && ref.script_id && scriptId !== ref.script_id) {
+        mismatches.push(`${app.name}/${envName}`);
+      }
+    }
+  }
+  if (checked === 0) {
+    return mk('clasp-config', '.clasp.json ↔ manifeste', 'info', 'aucun projet avec clasp_path');
+  }
+  if (mismatches.length > 0) {
+    return mk(
+      'clasp-config',
+      '.clasp.json ↔ manifeste',
+      'warn',
+      `scriptId divergent entre .clasp.json et le manifeste (${mismatches.join(', ')}) — clasp push/deploy viserait le MAUVAIS projet`,
+      'aligner le scriptId de .clasp.json sur script_id du manifeste (ou inversement)',
+    );
+  }
+  if (missing > 0) {
+    return mk(
+      'clasp-config',
+      '.clasp.json ↔ manifeste',
+      'info',
+      `${missing} projet(s) pas encore cloné(s) (pas de .clasp.json)`,
+      'clasp clone <scriptId> dans chaque dossier de projet',
+    );
+  }
+  return mk('clasp-config', '.clasp.json ↔ manifeste', 'ok', `${checked} projet(s) cohérent(s)`);
+}
+
+/** Baseline présente dans chaque projet cloné (sinon le hook reste muet, E3). */
+function checkBaselines(
+  cwd: string,
+  manifest: WorkspaceManifest,
+  fileExists: (p: string) => boolean,
+): DoctorCheck {
+  const missing: string[] = [];
+  for (const app of manifest.apps) {
+    for (const [envName, ref] of Object.entries(app.projects)) {
+      if (!ref?.clasp_path) continue;
+      const dir = join(cwd, ref.clasp_path);
+      if (!fileExists(join(dir, 'appsscript.json'))) continue; // pas (encore) cloné
+      const hasBaseline =
+        fileExists(join(dir, '.gaslens', 'baseline.json')) ||
+        fileExists(join(dir, '.gaslens', 'index.json'));
+      if (!hasBaseline) missing.push(`${app.name}/${envName}`);
+    }
+  }
+  if (missing.length === 0) {
+    return mk('baselines', 'baseline par projet', 'ok', 'tous les projets clonés ont une baseline');
+  }
+  return mk(
+    'baselines',
+    'baseline par projet',
+    'info',
+    `${missing.length} projet(s) cloné(s) sans baseline (${missing.join(', ')}) — le hook PostToolUse restera SILENCIEUX pour eux`,
+    'gaslens scan <dossier-projet> -o <dossier>/.gaslens/baseline.json',
+  );
+}
+
+function defaultReadText(p: string): string | null {
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 function mk(

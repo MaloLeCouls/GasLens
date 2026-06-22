@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDoctor, renderDoctorText } from '../src/doctor.js';
@@ -10,11 +10,19 @@ const VALID_MASTER = JSON.stringify({
   environments: { dev: { resources: {} }, prod: { resources: {} } },
 });
 
+const PLUGIN_SETTINGS = JSON.stringify({
+  extraKnownMarketplaces: { gaslens: { source: 'MaloLeCouls/GasLens' } },
+  enabledPlugins: ['gaslens@gaslens'],
+});
+
 async function tempWith(manifest: string | null): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
   if (manifest !== null) {
     await writeFile(join(root, 'gaslens.workspace.json'), manifest, 'utf8');
   }
+  // Le check plugin lit réellement .claude/settings.json (déclaration du plugin).
+  await mkdir(join(root, '.claude'), { recursive: true });
+  await writeFile(join(root, '.claude', 'settings.json'), PLUGIN_SETTINGS, 'utf8');
   return root;
 }
 
@@ -123,6 +131,88 @@ describe('doctor', () => {
       });
       expect(renderDoctorText(r, true)).toBe('');
       expect(renderDoctorText(r, false).length).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('doctor — E3 (durcissement multi-repo)', () => {
+  const MASTER_WITH_APP = JSON.stringify({
+    version: 1,
+    name: 'parc',
+    apps: [
+      { name: 'dash', projects: {
+        dev: { script_id: 'DASH_DEV', clasp_path: 'apps/dash/dev' },
+        prod: { script_id: 'DASH_PROD', clasp_path: 'apps/dash/prod' } } },
+    ],
+    environments: { dev: { resources: {} }, prod: { resources: {} } },
+  });
+
+  it('clasp-config WARN quand le scriptId de .clasp.json diverge du manifeste', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
+    try {
+      await writeFile(join(root, 'gaslens.workspace.json'), MASTER_WITH_APP, 'utf8');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(join(root, '.claude', 'settings.json'), PLUGIN_SETTINGS, 'utf8');
+      await writeFile(join(root, '.clasprc.json'), '{}', 'utf8'); // clasp « connecté » (home=root)
+      for (const [env, sid] of [['dev', 'DASH_DEV'], ['prod', 'WRONG_ID']] as const) {
+        const dir = join(root, 'apps', 'dash', env);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, 'appsscript.json'), '{}', 'utf8');
+        await writeFile(join(dir, '.clasp.json'), JSON.stringify({ scriptId: sid }), 'utf8');
+      }
+      const r = await runDoctor({ cwd: root, nodeVersion: '22.0.0', which: () => true, home: root });
+      const clasp = r.checks.find((c) => c.id === 'clasp-config');
+      expect(clasp?.status).toBe('warn');
+      expect(clasp?.detail).toContain('dash/prod');
+      expect(r.ok).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('baselines INFO quand un projet cloné n’a pas de baseline', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
+    try {
+      await writeFile(join(root, 'gaslens.workspace.json'), MASTER_WITH_APP, 'utf8');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(join(root, '.claude', 'settings.json'), PLUGIN_SETTINGS, 'utf8');
+      const dir = join(root, 'apps', 'dash', 'dev'); // cloné mais pas de .gaslens
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'appsscript.json'), '{}', 'utf8');
+      await writeFile(join(dir, '.clasp.json'), JSON.stringify({ scriptId: 'DASH_DEV' }), 'utf8');
+      const r = await runDoctor({ cwd: root, nodeVersion: '22.0.0', which: () => true, home: root });
+      const bl = r.checks.find((c) => c.id === 'baselines');
+      expect(bl?.status).toBe('info');
+      expect(bl?.detail).toContain('dash/dev');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('plugin-enabled WARN quand settings.json existe mais ne déclare pas le plugin', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
+    try {
+      await writeFile(join(root, 'gaslens.workspace.json'), VALID_MASTER, 'utf8');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(join(root, '.claude', 'settings.json'), '{}', 'utf8'); // pas d'enabledPlugins
+      const r = await runDoctor({ cwd: root, nodeVersion: '22.0.0', which: () => true, home: root });
+      expect(r.checks.find((c) => c.id === 'plugin-enabled')?.status).toBe('warn');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ADC INFO quand aucune credential par défaut n’est présente', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
+    try {
+      await writeFile(join(root, 'gaslens.workspace.json'), VALID_MASTER, 'utf8');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(join(root, '.claude', 'settings.json'), PLUGIN_SETTINGS, 'utf8');
+      // home=root (pas d'ADC), env sans GOOGLE_APPLICATION_CREDENTIALS.
+      const r = await runDoctor({ cwd: root, nodeVersion: '22.0.0', which: () => true, home: root, env: {} });
+      expect(r.checks.find((c) => c.id === 'adc')?.status).toBe('info');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
