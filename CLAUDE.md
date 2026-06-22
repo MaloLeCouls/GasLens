@@ -14,6 +14,10 @@ Il indexe un parc GAS (`.gs` + `.html` + `appsscript.json`) et matérialise les 
 - `gas-lens-conception.md` (V1) : philosophie outil-pour-agent, modèle GAS, `scan`/`inspect`/`search`/`impact`.
 - `gas-lens-conception-2-verification-et-agent.md` (V2) : `diff`/`check`, moteur de *shapes*, hooks, pièges de correction.
 - `gas-lens-conception-3-usages-agent-et-extensions.md` (V3) : familles d'usage, trous à tokens, capacités à venir, priorisation.
+- `gas-lens-conception-4-conventions-et-articulation.md` (V4) : conventions JSDoc agent (`doc`), écosystème cerveau/mains/yeux, **2 axes d'environnement** (`env`).
+- `gas-lens-conception-5-installation-et-packaging.md` (V5) : 2 canaux (npm `@malolecouls/gaslens` + **plugin Claude Code**), `workspace init`, `doctor`.
+
+`ROADMAP.md` (racine) trace l'implémentation des LOTs A→E (analyses V4, packaging V5, durcissement multi-repo).
 
 Quand le code et un volume divergent, **le code fait foi pour le comportement, les volumes pour l'intention** ; signaler la divergence plutôt que la laisser.
 
@@ -78,11 +82,19 @@ src/
   init.ts                      recettes CLAUDE.md / settings.json / SKILL.md (V2 §16, V3 §24) — `init --write` écrit aux bons chemins
   stale-check.ts               compare scanned_at à la plus récente mtime des sources ; warn stderr + commande de re-scan
   gas-services.ts              liste de NOMS de services natifs (utilisée par le scanner pour classifier les receivers ; validation par méthode = gas-api.ts)
+  ── V4 / V5 / multi-repo (LOTs A→E) ──
+  workspace-manifest.ts        manifeste maître gaslens.workspace.json (schéma zod + loader + helpers) — source de vérité du parc (V4 §26-29)
+  env-validate.ts              `env validate` — 2 axes d'env : env.cross_env_leak / library_version_mismatch / hardcoded_resource / undeclared_resource (V4 §29)
+  doc-lint.ts                  `doc lint` / `doc stub` — doc.undocumented / doc.param_drift (V4 §25) ; réutilise extract/jsdoc.ts (FunctionDefinition.doc)
+  doctor.ts                    `doctor` — prérequis (Node≥22, clasp, ADC, clasp-config↔manifeste, baselines par app, plugin) ; SessionStart (V5 §34, E3)
+  workspace-init.ts            `workspace init` — scaffolder (manifeste, .claude/settings.json, .mcp.json, apps/backlog/docs) (V5 §33)
+  workspace-add-app.ts         `workspace add-app` — onboarde une app (apps[] + apps/<nom>/{dev,prod} + rappel clasp clone) (E4)
+.claude-plugin/ skills/ commands/ hooks/ templates/ .mcp.json   FACE PLUGIN Claude Code (V5 §32) — installable via /plugin
 eval/tasks/*.json              jeu de tâches de référence (édition → verdict attendu)
 tests/                         vitest ; fixtures/sample-project + fixtures/sample-workspace
 ```
 
-**Stack** : Node 20+ · TypeScript `strict` + `noUncheckedIndexedAccess` · `commander` · `tree-sitter` + `tree-sitter-javascript` · `vitest`. **`google-auth-library` en `optionalDependencies`** (chargée uniquement par `resolve-live --use-apps-script-api`, via import dynamique). Pas d'autre dépendance runtime — rester léger.
+**Stack** : Node **22+** (requis par chrome-devtools-mcp) · TypeScript `strict` + `noUncheckedIndexedAccess` · `commander` · `zod` (schéma du manifeste maître) · `tree-sitter` + `tree-sitter-javascript` · `vitest`. **`google-auth-library` en `optionalDependencies`** (chargée uniquement par `resolve-live --use-apps-script-api`, via import dynamique). Pas d'autre dépendance runtime — rester léger.
 
 ---
 
@@ -106,7 +118,7 @@ scan  →  extract/* peuplent un FunctionRecord par fonction  →  index (Projec
 ```bash
 npm run build        # tsc
 npm run dev          # tsc --watch
-npm test             # vitest run  (doit rester vert ; ~257 tests)
+npm test             # vitest run  (doit rester vert ; ~440 tests)
 node bin/gaslens.js eval   # rejoue le dataset de référence ; doit rester à 100 %
 ```
 Toujours : build + test + eval verts avant de considérer une tâche terminée.
@@ -128,7 +140,14 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`, **`env validate`**, **`doc lint`/`doc stub`**, **`doctor`**, **`workspace init`/`workspace add-app`**.
+
+**V4 / V5 / multi-repo (LOTs A→E)** — voir `ROADMAP.md` :
+- **`env validate`** (V4 §29) : 2 axes d'environnement. `env.cross_env_leak` (BREAK, le finding-roi : id de ressource d'un autre env en dur), `env.library_version_mismatch` (prod en HEAD / mauvaise version figée), `env.hardcoded_resource` (id du bon env en dur, OU id non déclaré via openById/getFileById — E5), `env.undeclared_resource` (ressource déclarée dans un env mais pas un autre). Lit le manifeste maître ; intégré au pipeline `check`.
+- **`doc lint`/`doc stub`** (V4 §25) : `doc.undocumented` (info), `doc.param_drift` (warn). N'écrit jamais la prose. Extracteur étendu : `FunctionDefinition.doc` (présence/summary/param_tags).
+- **Le hook L1 lance désormais le pipeline `check` COMPLET** (`applyEnrichments` partagé) = diff + manifest + api + lint + **doc** + **env**. Avant E/A4 il ne faisait que le diff structurel — un break manifest/api/env ne bloquait pas.
+- **Multi-repo (LOT E)** : `scanWorkspace` nomme les projets par **chemin relatif** (`apps/dash/dev`, plus de collision `dev`/`prod` — E1) et lit le manifeste maître pour résoudre les appels `Lib.fn()` inter-repos en `cross_project_edges` **env-aware** (E2, `loadLibraryProviders`). `--project` accepte un suffixe (`dash/dev`).
+- **Face plugin** (V5 §32) : `.claude-plugin/{plugin,marketplace}.json`, `skills/` (7), `commands/` (4), `hooks/hooks.json` (PostToolUse→hook, SessionStart→doctor), `.mcp.json` (chrome-devtools épinglé `@1.3.0`), `templates/`. `package.json` → `@malolecouls/gaslens` (non publié).
 
 **Ergonomie LLM (V3 §24 + extensions)** :
 - `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.
@@ -141,7 +160,7 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - `ProjectIndex.file_hashes` : sha1 de chaque source (.gs/.html/appsscript.json) stockée dans l'index.
 - `ProjectIndex.scan_duration_ms` : timing total du scan.
 - `gaslens scan --bench` : breakdown des phases sur stderr (read / parse+extract / rest). Sample-project : 40 ms total (1 read + 21 parse+extract + 18 rest).
-- **Fast-path incrémental** (`gaslens scan --incremental [baseline]`) : si aucune source n'a une mtime > baseline.scanned_at ET que l'ensemble des fichiers est identique → retour direct du baseline. **×13 sur le sample-project (40 → 3 ms).** Câblé automatiquement dans le hook PostToolUse (réutilise `.gaslens/baseline.json`).
+- **Fast-path incrémental** (`gaslens scan --incremental [baseline]`) : si l'ensemble des fichiers est identique ET que le **hash de contenu** de chaque source matche `baseline.file_hashes` → retour direct du baseline. **Détection par HASH, pas par mtime** (E2) : le mtime juste après une écriture est non fiable (Windows/NTFS peut renvoyer un mtime périmé → un changement réel raté, hook CLEAN à tort). Un `touch` (mtime avancé, contenu identique) reste un no-op. Câblé automatiquement dans le hook PostToolUse (réutilise `.gaslens/baseline.json`).
 - **True-incremental partiel** : quand fast-path KO mais que le manifeste est inchangé, on saute le parse + extract des .gs dont le hash matche baseline.file_hashes et on réutilise leurs FunctionRecord + caches per-file (`pending_library_calls_by_file`, `unresolved_calls_by_file`). Contributions HTML des .html inchangés appliquées seulement aux records frais (les cachés les ont déjà). `rebuildCalledByFromOutboundCalls(records)` reconstruit `called_by` proprement (purge entries stales des records cachés). **×5 sur sample-project quand 1 .gs change** (40 → 8 ms).
 - **Partial étendu aux .html** : un changement .html est désormais supporté en partial (V3 §21, suite). Mécanique : (a) le scanner classe les .html en `unchanged` / `changed` par hash ; (b) `subtractHtmlContribsFromRecord` retire des records cachés les exposures, `inferred_contract.fields_read` et `unresolved_handlers` provenant des .html changés (via `Exposure.file` / `FieldRead.file` / `unresolved_handlers.where`) ; (c) les .html changés sont ré-extraits frais, leurs contribs ré-appliquées à TOUS les records (cachés + frais) ; les contribs des .html inchangés restent appliquées aux frais seulement. Fallback full scan uniquement si appsscript.json a changé ou si le set des fichiers diffère.
 - `FunctionRecord.outbound_calls` : substrat sérialisable du chemin partial.
@@ -178,9 +197,11 @@ scriptId résolu via `script-id.ts` (`.clasp.json` ou overrides CLI). Activation
 - **`clasp`** (défaut, historique) : harnais `.gs` à déployer dans un projet GAS sandbox dédié. Exécution dans le cloud Google avec effets de bord réels (emails, écritures Sheets, quota OAuth).
 - **`gas-fakes`** (V3 §23) : harnais `.mjs` exécutable LOCALEMENT via [gas-fakes](https://github.com/brucemcpherson/gas-fakes). Bootstrap `import 'gas-fakes';` en tête + footer auto-exécuté avec `process.exit(0|1)` pour intégration CI. C'est désormais la cible recommandée pour les tests de contrat (boucle save & refresh quasi instantanée, mode `vm` sandbox sans permissions). Activation : `gaslens emit-contract-tests --runner gas-fakes`.
 
-La roadmap V3 est essentiellement complète. Marches possibles futures :
-- Étendre le serveur MCP au-delà des 4 outils consolidés (`map`/`inspect`/`impact`/`check`) — contre-doctrine V3 §24 « peu d'outils à fort impact », à n'envisager que si demande terrain forte.
-- Continuer à étendre `GAS_API_DEPRECATED` et `GAS_API` selon observations.
+Les roadmaps V3, V4, V5 et le durcissement multi-repo (LOT E) sont livrés. Marches possibles futures (cf. `ROADMAP.md`) :
+- **`npm publish`** (`@malolecouls/gaslens`, accès public déjà configuré) + tag de release `vX.Y.Z` pour épingler le plugin (`#vX`) — nécessite l'auth npm de l'auteur (non fait).
+- Migrer la détection de littéraux de ressources (E5) vers un **extracteur d'index** (hot-path sans relire les sources) — touche l'agrégation incrémentale, à faire prudemment.
+- Étendre le serveur MCP au-delà des 4 outils consolidés — contre-doctrine V3 §24, à n'envisager que si demande terrain forte.
+- Continuer à étendre `GAS_API_DEPRECATED` / `GAS_API` selon observations.
 
 ---
 
@@ -190,6 +211,8 @@ La roadmap V3 est essentiellement complète. Marches possibles futures :
 - `withUserObject(ctx)` **décale** les args du handler (`(retourServeur, userObject)`) — ne pas prendre `userObject` pour la shape de retour.
 - Les **scriptlets** `<?= fn() ?>` sont des call sites : un `check` qui les rate dit `CLEAN` à tort.
 - `google.script.run` : retour **non sérialisable** = bug latent (`serializable.broke`), pas une erreur d'analyse.
+- **Multi-repo** : en workspace, un projet se nomme par son **chemin relatif** (`apps/dash/dev`), jamais le basename (sinon `apps/*/dev` collisionnent). La résolution cross-repo passe par le **manifeste maître** (`library_prefix`→projet), pas par le nom — `scan` le lit (`loadLibraryProviders`).
+- `env validate` lit le **manifeste maître + relit les sources** (pas l'index) : volontaire, hors hot-path index. Le fast-path incrémental se détecte par **hash**, jamais par mtime.
 
 ---
 
