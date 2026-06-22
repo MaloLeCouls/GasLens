@@ -1,0 +1,8 @@
+{
+  "name": "gaslens",
+  "version": "0.1.0",
+  "description": "Analyse statique GAS anti-régression + workspace multi-projets agent-friendly",
+  "author": "MaloLeCouls",
+  "homepage": "https://github.com/MaloLeCouls/GasLens",
+  "mcpServers": "./.mcp.json"
+}

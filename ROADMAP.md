@@ -62,16 +62,18 @@ Ordre de marche conseillé : **A → B → C → D**. `A1` (schéma manifeste) e
 
 ## 🟨 LOT C — Distribution : la « face plugin » du repo (V5) · *packaging, pas d'analyse*
 
-- [ ] **C1 — `.claude-plugin/`** : `plugin.json` + `marketplace.json` (rend `MaloLeCouls/GasLens`
+- [x] **C1 — `.claude-plugin/`** : `plugin.json` + `marketplace.json` (rend `MaloLeCouls/GasLens`
   installable via `/plugin marketplace add` + `/plugin install`). (V5 §32.1–32.2)
-- [ ] **C2 — `hooks/hooks.json`** (PostToolUse→hook, SessionStart→doctor) + `.mcp.json` racine
+- [x] **C2 — `hooks/hooks.json`** (PostToolUse→hook, **SessionStart→doctor**) + `.mcp.json` racine
   (chrome-devtools `--autoConnect`) + `templates/` (workspace + fragments CLAUDE.md). (V5 §32.3–32.4)
-- [ ] **C3 — 7 skills** `skills/<nom>/SKILL.md` : `gas-dev-loop, intake-triage, onboard-app,
+- [x] **C3 — 7 skills** `skills/<nom>/SKILL.md` : `gas-dev-loop, intake-triage, onboard-app,
   provision-env, refresh-dev-data, snapshot-sources, promote-deploy`. (V5 §32)
-- [ ] **C4 — Slash commands** : `/gaslens-onboard-app`, `/gaslens-promote`, `/gaslens-doctor`,
+- [x] **C4 — Slash commands** : `/gaslens-onboard-app`, `/gaslens-promote`, `/gaslens-doctor`,
   `/gaslens-init-workspace`. (V5 §37.6)
-- [ ] **C5 — Publication npm** : `gaslens@0.0.1` → `@malolecouls/gaslens`, vérifier `files`
-  (dist/bin/README) + bins `gaslens`/`gaslens-mcp`, `npm publish`. Débloque « une commande ». (V5 §37.1)
+- [x] **C5 — Packaging npm** : `gaslens@0.0.1` → **`@malolecouls/gaslens`** + `publishConfig.access=public`
+  + repository/homepage ; `files`(dist/bin/README) + bins inchangés. ⚠️ **`npm publish` NON lancé**
+  (besoin de l'auth npm + accord explicite). Structure validée par `tests/plugin-structure.test.ts`
+  (16 tests). (V5 §37.1)
 
 ## 🟧 LOT D — Validation & durcissement
 

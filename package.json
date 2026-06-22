@@ -1,11 +1,19 @@
 {
-  "name": "gaslens",
+  "name": "@malolecouls/gaslens",
   "version": "0.0.1",
   "description": "Outil CLI d'analyse de code Google Apps Script, conçu pour être consommé par un agent IA.",
   "type": "module",
   "bin": {
     "gaslens": "./bin/gaslens.js",
     "gaslens-mcp": "./bin/gaslens-mcp.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MaloLeCouls/GasLens.git"
+  },
+  "homepage": "https://github.com/MaloLeCouls/GasLens#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc",

@@ -1,0 +1,11 @@
+{
+  "name": "gaslens",
+  "owner": { "name": "MaloLeCouls", "url": "https://github.com/MaloLeCouls" },
+  "plugins": [
+    {
+      "name": "gaslens",
+      "source": ".",
+      "description": "GasLens (analyse statique GAS anti-régression) + workspace GAS agent : skills, hooks, slash commands et MCP Chrome."
+    }
+  ]
+}
