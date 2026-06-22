@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runEnvValidate } from '../src/env-validate.js';
+import { runEnvValidate, checkUndeclaredResources } from '../src/env-validate.js';
+import { parseWorkspaceManifest } from '../src/workspace-manifest.js';
 
 const LIB_ID = 'LIB_SCRIPT_ID_0000000000000000000000000';
 const SHEET_DEV = 'SHEET_DEV_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -151,6 +152,33 @@ describe('env validate — axe CODE', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('env validate — undeclared_resource (cohérence manifeste)', () => {
+  const asymmetric = parseWorkspaceManifest({
+    environments: {
+      dev: { resources: { mainSheet: 'S_DEV', intakeForm: 'F_DEV' } },
+      prod: { resources: { mainSheet: 'S_PROD' } }, // intakeForm manquant
+    },
+  }).manifest!;
+
+  it('signale une ressource déclarée en dev mais absente de prod', () => {
+    const findings = checkUndeclaredResources(asymmetric, ['prod']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.consumer_kind).toBe('env.undeclared_resource');
+    expect(findings[0]?.severity).toBe('warn');
+    expect(findings[0]?.reason).toContain('intakeForm');
+  });
+
+  it('aucun finding quand les environnements sont symétriques', () => {
+    const sym = parseWorkspaceManifest({
+      environments: {
+        dev: { resources: { mainSheet: 'S_DEV' } },
+        prod: { resources: { mainSheet: 'S_PROD' } },
+      },
+    }).manifest!;
+    expect(checkUndeclaredResources(sym, ['dev', 'prod'])).toEqual([]);
   });
 });
 

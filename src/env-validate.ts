@@ -26,6 +26,7 @@ import { readManifest } from './manifest.js';
 import {
   loadWorkspaceManifest,
   resourceOwnerIndex,
+  declaredLogicalNames,
   WORKSPACE_MANIFEST_FILENAME,
   type WorkspaceManifest,
   type Library,
@@ -126,6 +127,8 @@ export async function runEnvValidate(
     checked.push(t);
   }
 
+  findings.push(...checkUndeclaredResources(master, uniqueEnvs(checked)));
+
   const breaks = findings.filter((f) => f.severity === 'break');
   const warns = findings.filter((f) => f.severity === 'warn');
   const verdict = aggregateVerdict(breaks, warns);
@@ -163,6 +166,43 @@ function collectTargets(
   const rootResolved = resolve(opts.root);
   const exact = all.filter((t) => t.dir === rootResolved);
   return exact.length > 0 ? exact : all;
+}
+
+function uniqueEnvs(targets: ValidatedTarget[]): string[] {
+  return [...new Set(targets.map((t) => t.env))];
+}
+
+/**
+ * AXE RESSOURCES (cohérence du manifeste) — `env.undeclared_resource`. Une
+ * ressource logique déclarée dans certains environnements mais ABSENTE d'un env
+ * validé signale un parc sous-provisionné (ex: `mainSheet` ajoutée en dev,
+ * oubliée en prod) — la promotion casserait à l'exécution.
+ */
+export function checkUndeclaredResources(
+  master: WorkspaceManifest,
+  envs: string[],
+): Finding[] {
+  const union = declaredLogicalNames(master);
+  if (union.size === 0) return [];
+  const out: Finding[] = [];
+  for (const env of envs) {
+    const declared = new Set(Object.keys(master.environments[env]?.resources ?? {}));
+    for (const logical of union) {
+      if (declared.has(logical)) continue;
+      out.push({
+        severity: 'warn',
+        symbol: `env::${env}`,
+        consumer: { file: WORKSPACE_MANIFEST_FILENAME, line: 1 },
+        consumer_kind: 'env.undeclared_resource',
+        reason:
+          `la ressource logique '${logical}' est déclarée dans d'autres environnements ` +
+          `mais absente de environments.${env}.resources — l'environnement '${env}' est sous-provisionné`,
+        fix_hint: `ajouter '${logical}' à environments.${env}.resources dans ${WORKSPACE_MANIFEST_FILENAME}`,
+        confidence: 'high',
+      });
+    }
+  }
+  return out;
 }
 
 /** AXE CODE — politique de version de la bibliothèque mère. */

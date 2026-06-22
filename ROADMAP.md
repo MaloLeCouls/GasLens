@@ -33,8 +33,9 @@ Ordre de marche conseillé : **A → B → C → D**. `A1` (schéma manifeste) e
 - [x] **A2 — `gaslens env validate`** (vague 1) → findings `env.cross_env_leak` (le roi, BREAK),
   `env.library_version_mismatch` (axe CODE, BREAK/WARN), `env.hardcoded_resource` (WARN).
   → `src/env-validate.ts`, commande CLI `env validate`, intégré à `runCheck`, 8 tests.
-  ↳ **A2-bis (vague 2, en attente)** : `env.undeclared_resource` + extracteur de littéraux pour
-  le hot-path + extension du harnais d'éval. (V4 §29)
+  ↳ **A2-bis (fait)** : `env.undeclared_resource` (cohérence du manifeste : ressource déclarée dans
+  un env mais absente d'un autre, WARN). ↳ **A2-ter (différé)** : migration de la détection de
+  littéraux vers un extracteur d'index (hot-path) + extension du harnais d'éval. (V4 §29)
 - [x] **A3 — Famille `doc`** : `gaslens doc lint --undocumented/--drift` + `gaslens doc stub <fn>`
   → findings `doc.undocumented` (info), `doc.param_drift` (warn). Extracteur étendu
   (`FunctionDefinition.doc`), `src/doc-lint.ts`, 9 tests. *`return_drift`/`stale_ref` → vague 2.*
@@ -50,13 +51,14 @@ Ordre de marche conseillé : **A → B → C → D**. `A1` (schéma manifeste) e
 
 ## 🟩 LOT B — Outillage de setup (V5) · *moteur*
 
-- [ ] **B1 — `gaslens doctor`** (+ `--hook --quiet-when-ok`) : vérifie binaire/PATH, Node≥22,
-  clasp loggé, API Apps Script, Chrome remote-debug, plugin actif, `workspace.json`+index.
-  Exit code exploitable. Branché sur `SessionStart`. (V5 §34)
-- [ ] **B2 — `gaslens workspace init <nom>`** : scaffolder complet (CLAUDE.md, README,
-  `gaslens.workspace.json` squelette, `.gitignore`, `.claude/settings.json`, `.mcp.json`,
-  `apps/`, `backlog/{inbox,triaged,archive}/`, `docs/`). Flags `--with-plugin/--mcp/--git`.
-  Promeut `init --section`. (V5 §33)
+- [x] **B1 — `gaslens doctor`** (+ `--hook --quiet-when-ok`) : Node≥22, binaire gaslens/clasp sur
+  le PATH, clasp connecté, plugin câblé, manifeste maître + index. Honnête : API Apps Script /
+  Chrome marqués `manual`. Exit code exploitable. → `src/doctor.ts`, 6 tests. (V5 §34)
+- [x] **B2 — `gaslens workspace init <nom>`** : scaffolder complet (CLAUDE.md, README,
+  `gaslens.workspace.json` squelette, `.gitignore`, `.claude/settings.json` déclarant le plugin,
+  `.mcp.json`, `apps/`, `backlog/{inbox,triaged,archive}/`, `docs/`). Flags `--no-plugin/--mcp/--no-git`.
+  → `src/workspace-init.ts`, 6 tests. (V5 §33)
+  ↳ *Reste branchement SessionStart→doctor : c'est le `hooks/hooks.json` du LOT C (C2).*
 
 ## 🟨 LOT C — Distribution : la « face plugin » du repo (V5) · *packaging, pas d'analyse*
 

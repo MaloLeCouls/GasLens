@@ -37,6 +37,12 @@ import { analyzeProdTruth, renderProdTruthText } from './prod-truth.js';
 import { analyzeDeployments, renderDeployAwareText } from './deploy-aware.js';
 import { runEnvValidate, renderEnvValidateText } from './env-validate.js';
 import { lintDoc, docStub, renderDocLintText, type DocCheck } from './doc-lint.js';
+import { runDoctor, renderDoctorText } from './doctor.js';
+import {
+  buildWorkspaceFiles,
+  writeWorkspace,
+  gitInitAndCommit,
+} from './workspace-init.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -1512,6 +1518,65 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       process.exit(2);
     });
 
+  const workspace = program
+    .command('workspace')
+    .description("Gestion du workspace multi-projets (V5 §33).");
+
+  workspace
+    .command('init')
+    .description(
+      "Scaffold un workspace complet : manifeste maître squelette, " +
+        ".claude/settings.json déclarant la marketplace + le plugin gaslens, " +
+        ".mcp.json Chrome, arborescence apps/backlog/docs, CLAUDE.md + README. " +
+        "Ne génère PAS le plugin (il s'installe à part). N'écrase jamais sans --force.",
+    )
+    .argument('<nom>', 'Nom du workspace (dossier créé sous le cwd)')
+    .option('--no-plugin', "Ne pas déclarer la marketplace + le plugin dans .claude/settings.json")
+    .option('--mcp <mode>', 'chrome | none — écrit (ou non) .mcp.json', 'chrome')
+    .option('--no-git', "Ne pas faire git init + premier commit")
+    .option('--force', "Écraser les fichiers existants", false)
+    .action(async (nom: string, opts: WorkspaceInitCliOpts) => {
+      const mcp = opts.mcp === 'none' ? 'none' : 'chrome';
+      const root = resolve(nom);
+      const files = buildWorkspaceFiles({ name: nom, withPlugin: opts.plugin, mcp });
+      const { written, skipped } = await writeWorkspace(root, files, { force: opts.force });
+      for (const w of written) process.stderr.write(`  + ${w}\n`);
+      for (const s of skipped) process.stderr.write(`  · ${s.path} (${s.reason})\n`);
+      let git = { ok: false, message: 'git init désactivé (--no-git)' };
+      if (opts.git) git = await gitInitAndCommit(root);
+      process.stderr.write(`  git: ${git.message}\n`);
+      process.stdout.write(
+        `gaslens workspace init: '${nom}' prêt (${written.length} fichier(s) écrit(s)). ` +
+          `Prochaine étape : cd ${nom} && claude, puis 'gaslens doctor'.\n`,
+      );
+    });
+
+  program
+    .command('doctor')
+    .description(
+      "Le checklist qui se vérifie tout seul (V5 §34) : Node≥22, binaire " +
+        "gaslens/clasp sur le PATH, clasp connecté, plugin câblé, manifeste " +
+        "maître + index. Lancé par le hook SessionStart. Honnête : ce qui n'est " +
+        "pas vérifiable hors-ligne (API Apps Script, Chrome) est marqué 'manual'.",
+    )
+    .argument('[root]', 'Racine à inspecter', '.')
+    .option('--hook', 'Mode hook SessionStart (sortie condensée)', false)
+    .option('--quiet-when-ok', 'Silencieux si rien à régler (error/warn)', false)
+    .option('--format <fmt>', 'json | text', 'text')
+    .option('--compact', 'JSON sans indentation', false)
+    .action(async (root: string, opts: DoctorCliOpts) => {
+      const report = await runDoctor({ cwd: resolve(root) });
+      if (opts.format === 'json') {
+        if (!(opts.quietWhenOk && report.ok)) {
+          process.stdout.write(jsonOut(report, opts.compact) + '\n');
+        }
+      } else {
+        const text = renderDoctorText(report, opts.quietWhenOk);
+        if (text) process.stdout.write(text + '\n');
+      }
+      process.exit(report.exit_code);
+    });
+
   program
     .command('commands')
     .description(
@@ -1627,6 +1692,20 @@ interface DocStubCliOpts {
   project?: string;
 }
 
+interface DoctorCliOpts {
+  hook: boolean;
+  quietWhenOk: boolean;
+  format: string;
+  compact: boolean;
+}
+
+interface WorkspaceInitCliOpts {
+  plugin: boolean;
+  mcp: string;
+  git: boolean;
+  force: boolean;
+}
+
 interface CommandOverviewEntry {
   name: string;
   tldr: string;
@@ -1648,6 +1727,8 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'env validate [root]', tldr: 'axes d\'environnement : library_version_mismatch + cross_env_leak (manifeste maître)', reads_index: false, emits_findings: true },
   { name: 'doc lint', tldr: 'fonctions sans intention (undocumented) + @param en dérive (param_drift)', reads_index: true, emits_findings: true },
   { name: 'doc stub <fn>', tldr: 'squelette JSDoc à compléter (params détectés)', reads_index: true, emits_findings: false },
+  { name: 'doctor [root]', tldr: 'checklist prérequis auto-vérifiant (Node/clasp/plugin/manifeste) ; --hook --quiet-when-ok', reads_index: false, emits_findings: false },
+  { name: 'workspace init <nom>', tldr: 'scaffold workspace (manifeste, .claude/settings, .mcp.json, apps/backlog/docs)', reads_index: false, emits_findings: false },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },

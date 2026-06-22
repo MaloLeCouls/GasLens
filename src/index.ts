@@ -13,6 +13,10 @@ export { runEnvValidate } from './env-validate.js';
 export type { EnvValidateReport } from './env-validate.js';
 export { lintDoc, docStub } from './doc-lint.js';
 export type { DocLintReport } from './doc-lint.js';
+export { runDoctor } from './doctor.js';
+export type { DoctorReport, DoctorCheck } from './doctor.js';
+export { buildWorkspaceFiles, writeWorkspace } from './workspace-init.js';
+export type { WorkspaceInitOptions } from './workspace-init.js';
 export type {
   ProjectIndex,
   WorkspaceIndex,
