@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { scanProject } from './scanner.js';
 import { diffIndexes } from './diff.js';
+import { applyEnrichments } from './check.js';
 import type { ProjectIndex } from './types.js';
 import type { DiffReport } from './findings.js';
 
@@ -83,11 +84,16 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     root: projectRoot,
     incrementalBaseline: baseline,
   });
-  const report = diffIndexes(baseline, current, {
+  const diff = diffIndexes(baseline, current, {
     baselineLabel: baselinePath,
     currentLabel: 'working-tree',
     severity_threshold: 'warn',
   });
+  // L1 (V4 §27) : le hook gate l'édition sur le MÊME pipeline que `gaslens
+  // check` — diff structurel + manifest + API + lint + doc + env. C'est ce qui
+  // fait remonter un service avancé non déclaré ou une fuite inter-env dès la
+  // frappe, pas seulement au `check` manuel.
+  const report = await applyEnrichments(diff, current, projectRoot, 'warn');
 
   if (report.verdict !== 'BREAK') {
     return { kind: 'clean', report };

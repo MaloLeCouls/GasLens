@@ -35,12 +35,43 @@ import {
 } from './resolve-live.js';
 import { analyzeProdTruth, renderProdTruthText } from './prod-truth.js';
 import { analyzeDeployments, renderDeployAwareText } from './deploy-aware.js';
+import { runEnvValidate, renderEnvValidateText } from './env-validate.js';
+import { lintDoc, docStub, renderDocLintText, type DocCheck } from './doc-lint.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
 /** JSON output : pretty (indent 2) ou compact selon --compact. */
 function jsonOut(value: unknown, compact: boolean): string {
   return compact ? JSON.stringify(value) : JSON.stringify(value, null, 2);
+}
+
+/**
+ * Charge un index (projet ou workspace) depuis le disque, ou sort en code 2
+ * avec un message pédagogique. Centralise le boilerplate commun aux commandes
+ * qui lisent l'index.
+ */
+async function loadIndexOrExit(
+  indexPath: string,
+  cmd: string,
+): Promise<ProjectIndex | WorkspaceIndex> {
+  const idxPath = resolve(indexPath);
+  if (!existsSync(idxPath)) {
+    process.stderr.write(
+      `gaslens ${cmd}: index introuvable à ${idxPath}. Lance d'abord 'gaslens scan'.\n`,
+    );
+    process.exit(2);
+  }
+  let raw: ProjectIndex | WorkspaceIndex;
+  try {
+    raw = JSON.parse(await readFile(idxPath, 'utf8')) as ProjectIndex | WorkspaceIndex;
+  } catch (err) {
+    process.stderr.write(
+      `gaslens ${cmd}: index illisible — ${(err as Error).message}.\n`,
+    );
+    process.exit(2);
+  }
+  await warnIfStale(raw, idxPath);
+  return raw;
 }
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -1371,6 +1402,116 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       process.exit(0);
     });
 
+  const env = program
+    .command('env')
+    .description(
+      "Vérifications inter-environnements (V4 §29) basées sur le manifeste " +
+        "maître gaslens.workspace.json (les deux axes : CODE et RESSOURCES).",
+    );
+
+  env
+    .command('validate')
+    .description(
+      "Valide l'alignement des deux axes d'environnement : politique de " +
+        "version de la bibliothèque (env.library_version_mismatch) et ids de " +
+        "ressources en dur (env.cross_env_leak — le finding-roi — / " +
+        "env.hardcoded_resource). 100 % statique et local.",
+    )
+    .argument('[root]', 'Racine du workspace ou d\'un projet (on remonte au manifeste maître)', '.')
+    .option('--project <name>', 'Cibler une seule app du manifeste maître')
+    .option('--env <name>', 'Cibler un seul environnement (dev | prod)')
+    .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .action(async (root: string, opts: EnvValidateCliOpts) => {
+      const report = await runEnvValidate({
+        root: resolve(root),
+        project: opts.project,
+        env: opts.env,
+      });
+      if (opts.format === 'text') {
+        process.stdout.write(renderEnvValidateText(report) + '\n');
+      } else {
+        process.stdout.write(jsonOut(report, opts.compact) + '\n');
+      }
+      if (report.verdict === 'BREAK') process.exit(3);
+      if (report.verdict === 'WARN') process.exit(4);
+      process.exit(0);
+    });
+
+  const doc = program
+    .command('doc')
+    .description(
+      "Conventions de descriptions « pour l'agent » (V4 §25) : repère les " +
+        "manques d'intention et la dérive de la doc — sans jamais écrire la prose.",
+    );
+
+  doc
+    .command('lint')
+    .description(
+      "Signale les fonctions sans ligne d'intention (doc.undocumented, le " +
+        "« highlight ») et les tags @param sans paramètre réel (doc.param_drift). " +
+        "N'auto-écrit jamais la prose. Sortie info/warn — jamais BREAK.",
+    )
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Cibler un seul projet d'un index workspace")
+    .option('--undocumented', 'Ne lister que les fonctions sans intention', false)
+    .option('--drift', 'Ne lister que les @param en dérive', false)
+    .option('--public-only', 'Ignorer les fonctions privées (suffixe _)', false)
+    .option('--format <fmt>', 'json | text', 'json')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .action(async (opts: DocLintCliOpts) => {
+      const raw = await loadIndexOrExit(opts.indexPath, 'doc lint');
+      const targets = pickManifestTargets(raw, opts.project);
+      if (targets.length === 0) {
+        process.stderr.write(`gaslens doc lint: --project '${opts.project ?? ''}' introuvable.\n`);
+        process.exit(2);
+      }
+      const checks = new Set<DocCheck>();
+      if (opts.undocumented) checks.add('undocumented');
+      if (opts.drift) checks.add('drift');
+      const reports = targets.map((p) =>
+        lintDoc(p, { checks, publicOnly: opts.publicOnly }),
+      );
+      const verdict = reports.some((r) => r.verdict === 'BREAK')
+        ? 'BREAK'
+        : reports.some((r) => r.verdict === 'WARN')
+          ? 'WARN'
+          : 'CLEAN';
+      if (opts.format === 'text') {
+        for (const r of reports) process.stdout.write(renderDocLintText(r) + '\n');
+      } else {
+        process.stdout.write(jsonOut({ verdict, projects: reports }, opts.compact) + '\n');
+      }
+      if (verdict === 'BREAK') process.exit(3);
+      if (verdict === 'WARN') process.exit(4);
+      process.exit(0);
+    });
+
+  doc
+    .command('stub')
+    .description(
+      "Émet un squelette JSDoc pour une fonction (params détectés, intention " +
+        "et @returns laissés à compléter). Aide à rédiger — ne remplace rien.",
+    )
+    .argument('<fn>', 'Nom de la fonction à documenter')
+    .option('--index-path <path>', 'Chemin vers index.json', './.gaslens/index.json')
+    .option('--project <name>', "Cibler un seul projet d'un index workspace")
+    .action(async (fn: string, opts: DocStubCliOpts) => {
+      const raw = await loadIndexOrExit(opts.indexPath, 'doc stub');
+      const targets = pickManifestTargets(raw, opts.project);
+      for (const p of targets) {
+        const stub = docStub(p, fn);
+        if (stub) {
+          process.stdout.write(stub + '\n');
+          process.exit(0);
+        }
+      }
+      process.stderr.write(
+        `gaslens doc stub: fonction '${fn}' introuvable dans l'index.\n`,
+      );
+      process.exit(2);
+    });
+
   program
     .command('commands')
     .description(
@@ -1464,6 +1605,28 @@ interface CommandsCliOpts {
   format: string;
 }
 
+interface EnvValidateCliOpts {
+  project?: string;
+  env?: string;
+  format: string;
+  compact: boolean;
+}
+
+interface DocLintCliOpts {
+  indexPath: string;
+  project?: string;
+  undocumented: boolean;
+  drift: boolean;
+  publicOnly: boolean;
+  format: string;
+  compact: boolean;
+}
+
+interface DocStubCliOpts {
+  indexPath: string;
+  project?: string;
+}
+
 interface CommandOverviewEntry {
   name: string;
   tldr: string;
@@ -1482,12 +1645,15 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'validate-api', tldr: 'méthodes GAS hallucinées + arity manquante', reads_index: true, emits_findings: true },
   { name: 'lint-runtime', tldr: 'quota/lock/trigger anti-patterns (warn/info)', reads_index: true, emits_findings: true },
   { name: 'lint-webapp', tldr: 'mixed_content / link_target / form_submit (warn)', reads_index: true, emits_findings: true },
+  { name: 'env validate [root]', tldr: 'axes d\'environnement : library_version_mismatch + cross_env_leak (manifeste maître)', reads_index: false, emits_findings: true },
+  { name: 'doc lint', tldr: 'fonctions sans intention (undocumented) + @param en dérive (param_drift)', reads_index: true, emits_findings: true },
+  { name: 'doc stub <fn>', tldr: 'squelette JSDoc à compléter (params détectés)', reads_index: true, emits_findings: false },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais de test de contrat (--runner clasp|gas-fakes ; gas-fakes = local Node)', reads_index: true, emits_findings: false },
-  { name: 'hook --event', tldr: 'implémentation du hook PostToolUse Claude Code', reads_index: false, emits_findings: true },
+  { name: 'hook --event', tldr: 'hook PostToolUse : pipeline check complet (diff+manifest+api+lint+doc+env) à chaque édition', reads_index: false, emits_findings: true },
   { name: 'init', tldr: 'recettes CLAUDE.md / settings.json / SKILL.md', reads_index: false, emits_findings: false },
   { name: 'eval', tldr: 'rejoue le dataset de référence', reads_index: false, emits_findings: false },
   { name: 'commands', tldr: 'cette liste', reads_index: false, emits_findings: false },

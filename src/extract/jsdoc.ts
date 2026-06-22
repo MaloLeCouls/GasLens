@@ -1,16 +1,28 @@
 import type { Param, ReturnDoc } from '../types.js';
 
 export interface ParsedJsdoc {
+  /** Un bloc `/** ... *​/` valide a été fourni. */
+  present: boolean;
+  /** Texte d'intention (lignes avant le premier `@tag`), ou null. */
+  summary: string | null;
   params: Map<string, { type: string | null; desc: string | null }>;
+  /** Noms déclarés dans les tags `@param`, dans l'ordre de déclaration. */
+  paramTagNames: string[];
   returns: ReturnDoc | null;
 }
 
 /**
- * Parser JSDoc minimal v0 : @param et @returns.
+ * Parser JSDoc minimal v0 : intention (summary), @param et @returns.
  * Gère les accolades imbriquées dans les types (ex: `{{a:number, b:string}}`).
  */
 export function parseJsdoc(commentText: string | null): ParsedJsdoc {
-  const empty: ParsedJsdoc = { params: new Map(), returns: null };
+  const empty: ParsedJsdoc = {
+    present: false,
+    summary: null,
+    params: new Map(),
+    paramTagNames: [],
+    returns: null,
+  };
   if (!commentText) return empty;
   if (!commentText.startsWith('/**')) return empty;
 
@@ -22,19 +34,34 @@ export function parseJsdoc(commentText: string | null): ParsedJsdoc {
     .join('\n');
 
   const params = new Map<string, { type: string | null; desc: string | null }>();
+  const paramTagNames: string[] = [];
   let returns: ReturnDoc | null = null;
 
   for (const tag of scanTags(body)) {
     if (tag.name === 'param') {
       const r = parseParamTag(tag.value);
-      if (r) params.set(r.name, { type: r.type, desc: r.desc });
+      if (r) {
+        params.set(r.name, { type: r.type, desc: r.desc });
+        paramTagNames.push(r.name);
+      }
     } else if (tag.name === 'returns' || tag.name === 'return') {
       const r = parseReturnTag(tag.value);
       if (r) returns = { jsdoc_type: r.type, desc: r.desc };
     }
   }
 
-  return { params, returns };
+  return { present: true, summary: extractSummary(body), params, paramTagNames, returns };
+}
+
+/** L'intention = les lignes avant le premier `@tag` (description libre). */
+function extractSummary(body: string): string | null {
+  const lines: string[] = [];
+  for (const line of body.split('\n')) {
+    if (/^\s*@[A-Za-z]/.test(line)) break;
+    lines.push(line);
+  }
+  const summary = lines.join('\n').trim();
+  return summary.length > 0 ? summary : null;
 }
 
 interface RawTag {

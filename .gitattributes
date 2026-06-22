@@ -1,0 +1,13 @@
+# Normalisation des fins de ligne : LF partout, indépendamment de l'OS.
+# Les fixtures d'éval (.gs/.html) font du matching exact `before_contains`
+# sur des chaînes en LF — un checkout CRLF (Windows, core.autocrlf=true)
+# casse les tâches d'éval. Ce fichier garantit un arbre de travail en LF.
+* text=auto eol=lf
+
+*.gs   text eol=lf
+*.html text eol=lf
+*.htm  text eol=lf
+*.ts   text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf

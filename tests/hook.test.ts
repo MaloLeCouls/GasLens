@@ -113,6 +113,35 @@ describe('hook — intégration sur copie temporaire', () => {
     expect(o.kind).toBe('clean');
   });
 
+  it('BLOCK sur un break NON-structurel introduit (manifest enrichment, A4)', async () => {
+    // Avant A4, le hook ne faisait que le diff structurel : un appel de
+    // librairie non déclarée ne bloquait pas. Désormais le hook lance tout le
+    // pipeline `check` → manifest.library.undeclared remonte en BREAK.
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-hook-a4-'));
+    try {
+      await writeFile(join(root, 'appsscript.json'), JSON.stringify({ runtimeVersion: 'V8' }));
+      await writeFile(join(root, 'main.gs'), `function ok() { return 1; }`);
+      const baseline = await scanProject({ root });
+      await mkdir(join(root, '.gaslens'), { recursive: true });
+      await writeFile(join(root, '.gaslens', 'baseline.json'), JSON.stringify(baseline));
+      // Édition : introduit un appel à une librairie non déclarée.
+      await writeFile(join(root, 'main.gs'), `function ok() { return OAuth2.getService('me'); }`);
+      const o = await runHook({
+        stdinJson: JSON.stringify({
+          tool_name: 'Edit',
+          tool_input: { file_path: join(root, 'main.gs') },
+        }),
+      });
+      expect(o.kind).toBe('block');
+      if (o.kind === 'block') {
+        expect(o.report.verdict).toBe('BREAK');
+        expect(o.report.breaks.some((b) => b.consumer_kind === 'manifest.library')).toBe(true);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('BLOCK avec hookPayload JSON quand on retire messageId du retour', async () => {
     // Modifie email.gs pour retirer messageId du JSDoc et du return.
     const newSrc = `/**

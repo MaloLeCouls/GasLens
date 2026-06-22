@@ -19,6 +19,21 @@ export interface ReturnDoc {
   desc: string | null;
 }
 
+/**
+ * Métadonnées JSDoc « pour l'agent » d'une fonction (V4 §25). Capture ce qu'il
+ * faut à `gaslens doc lint` : la présence d'un bloc, le texte d'intention
+ * (le *why*, seule partie non-dérivable) et les noms de tags `@param`
+ * (pour détecter la dérive vis-à-vis de la signature réelle).
+ */
+export interface FunctionDoc {
+  /** Un bloc `/** ... *​/` est attaché à la définition. */
+  present: boolean;
+  /** Description d'intention (texte avant les tags), ou null si absente. */
+  summary: string | null;
+  /** Noms déclarés dans les tags `@param` (réels ou non). */
+  param_tags: string[];
+}
+
 export type Visibility = 'public' | 'private';
 
 export interface FunctionDefinition {
@@ -28,6 +43,8 @@ export interface FunctionDefinition {
   end_line: number;
   params: Param[];
   returns: ReturnDoc | null;
+  /** Métadonnées JSDoc (V4 §25) — substrat de `gaslens doc lint`. */
+  doc?: FunctionDoc;
   visibility: Visibility;
   /** @deprecated — utiliser FunctionRecord.return_analysis.serializable. */
   serializable_return: boolean | null;

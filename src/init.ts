@@ -36,6 +36,34 @@ CE QUE TU DOIS ENCORE ÉVALUER TOI-MÊME (gaslens ne peut pas) :
 
 Si \`gaslens check\` renvoie une couverture < 100 %, vérifie UNIQUEMENT les points
 listés dans \`coverage.unresolved\` — pas tout le repo.
+
+## Convention de descriptions « pour l'agent » (JSDoc, V4 §25)
+
+Règle unique : **une description ne porte que ce que le code ne dit pas ET que
+gaslens ne peut pas déduire.** Tout fait dérivable et volatil (lignes, callers,
+shape exacte, arité) reste HORS de la source — récupère-le frais via
+\`gaslens inspect\` / \`gaslens emit-dts\`. Mettre un numéro de ligne ou une liste
+d'appels en commentaire est une métadonnée qui périme et trompe l'agent.
+
+Mets dans le JSDoc, et seulement ça : l'**intention** (le *why* métier), les
+**unités / sémantique** de valeur (« durée en secondes », « statut ∈ {ok,ko} »),
+les **invariants / pièges** durables (« idempotent », « lu côté client — ne pas
+retirer ce champ »).
+
+\`\`\`js
+/**
+ * Envoie le rapport hebdomadaire aux destinataires.            // intention (REQUIS)
+ * Idempotent : un second appel le même jour n'envoie rien.     // invariant durable
+ * @param {string[]} recipients  emails ; itérés, pas indexés.  // le sens, pas le type
+ * @returns succès + id de message LU CÔTÉ CLIENT (dashboard.html)
+ *          — ne pas retirer sans vérifier le consommateur.     // contrat, pas la shape
+ */
+\`\`\`
+
+À NE PAS mettre : numéros de ligne, liste d'appels/callers, arité, shape JSON
+complète. \`gaslens doc lint\` (branché au hook) signale les fonctions sans
+intention et les @param/@returns qui ont dérivé — sans jamais écrire la prose à
+ta place.
 `;
 
 export function claudeMdSubrepo(projectName: string, libPrefix?: string): string {

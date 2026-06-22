@@ -31,7 +31,15 @@ export type ConsumerKind =
   | 'lint.trigger_orphan'
   | 'webapp.mixed_content'
   | 'webapp.link_target'
-  | 'webapp.form_submit';
+  | 'webapp.form_submit'
+  | 'env.library_version_mismatch'
+  | 'env.cross_env_leak'
+  | 'env.hardcoded_resource'
+  | 'env.undeclared_resource'
+  | 'doc.undocumented'
+  | 'doc.param_drift'
+  | 'doc.return_drift'
+  | 'doc.stale_ref';
 
 export type Confidence = 'high' | 'medium' | 'low';
 

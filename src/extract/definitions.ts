@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SyntaxNode } from 'tree-sitter';
-import type { FunctionDefinition, Visibility } from '../types.js';
-import { applyJsdocToParams, parseJsdoc } from './jsdoc.js';
+import type { FunctionDefinition, FunctionDoc, Visibility } from '../types.js';
+import { applyJsdocToParams, parseJsdoc, type ParsedJsdoc } from './jsdoc.js';
 
 export interface RawDefinition {
   name: string;
@@ -80,6 +80,14 @@ function visibilityOf(name: string): Visibility {
   return name.endsWith('_') ? 'private' : 'public';
 }
 
+function docFrom(jsdoc: ParsedJsdoc): FunctionDoc {
+  return {
+    present: jsdoc.present,
+    summary: jsdoc.summary,
+    param_tags: jsdoc.paramTagNames,
+  };
+}
+
 function fromFunctionDeclaration(
   node: SyntaxNode,
   file: string,
@@ -103,6 +111,7 @@ function fromFunctionDeclaration(
       end_line: node.endPosition.row + 1,
       params,
       returns: jsdoc.returns,
+      doc: docFrom(jsdoc),
       visibility: visibilityOf(name),
       serializable_return: null,
       body_fingerprint: bodyFingerprint(bodyNode.text),
@@ -146,6 +155,7 @@ function fromVariableDeclarator(
       end_line: declarator.endPosition.row + 1,
       params,
       returns: jsdoc.returns,
+      doc: docFrom(jsdoc),
       visibility: visibilityOf(name),
       serializable_return: null,
       body_fingerprint: bodyFingerprint(bodyNode.text),

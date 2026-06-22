@@ -4,6 +4,8 @@ import { analyzeManifest } from './manifest-analysis.js';
 import { validateApi } from './validate-api.js';
 import { lintRuntime } from './lint-runtime.js';
 import { lintWebapp } from './lint-webapp.js';
+import { runEnvValidate } from './env-validate.js';
+import { lintDoc } from './doc-lint.js';
 import {
   aggregateVerdict,
   summarize,
@@ -49,10 +51,7 @@ export async function runCheck(opts: CheckOptions): Promise<CheckResult> {
   };
   const report = diffIndexes(opts.baseline, current, diffOpts);
   const threshold = opts.severity_threshold ?? 'warn';
-  const withManifest = enrichWithManifestFindings(report, current, threshold);
-  const withApi = enrichWithApiFindings(withManifest, current, threshold);
-  const withRuntime = enrichWithLintRuntimeFindings(withApi, current, threshold);
-  const enriched = enrichWithLintWebappFindings(withRuntime, current, threshold);
+  const enriched = await applyEnrichments(report, current, opts.currentRoot, threshold);
   const fail_on = opts.fail_on ?? 'break';
   const exit_code = exitCodeFor(enriched.verdict, fail_on);
   return { report: enriched, exit_code };
@@ -146,6 +145,84 @@ export function enrichWithLintWebappFindings(
   const lint = lintWebapp(current);
   if (lint.findings.length === 0) return report;
   const extra = lint.findings.filter((f) => keepBySeverity(f, threshold));
+  if (extra.length === 0) return report;
+  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
+  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
+  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
+  const verdict = aggregateVerdict(breaks, warns);
+  return {
+    ...report,
+    breaks,
+    warns,
+    safe,
+    verdict,
+    summary: summarize(breaks, warns, report.coverage.resolved_pct),
+  };
+}
+
+/**
+ * Enrichit le rapport avec les findings de documentation (V4 §25). Branché en
+ * L1 : avec un seuil `warn`, seul `doc.param_drift` (dérive de signature)
+ * remonte ; `doc.undocumented` (info, le « highlight ») reste consultable via
+ * `gaslens doc lint` sans bloquer l'édition.
+ */
+export function enrichWithDocFindings(
+  report: DiffReport,
+  current: ProjectIndex,
+  threshold: 'info' | 'warn' | 'break',
+): DiffReport {
+  const doc = lintDoc(current);
+  if (doc.findings.length === 0) return report;
+  const extra = doc.findings.filter((f) => keepBySeverity(f, threshold));
+  if (extra.length === 0) return report;
+  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
+  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
+  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
+  const verdict = aggregateVerdict(breaks, warns);
+  return {
+    ...report,
+    breaks,
+    warns,
+    safe,
+    verdict,
+    summary: summarize(breaks, warns, report.coverage.resolved_pct),
+  };
+}
+
+/**
+ * Chaîne complète d'enrichissement (V2 §9.2 + V4 §25/§29) partagée par
+ * `runCheck` ET le hook L1 : diff structurel → manifest → API → lint runtime →
+ * lint webapp → doc → env. C'est ce qui fait que le hook gate *chaque* édition
+ * sur les mêmes findings que `gaslens check`.
+ */
+export async function applyEnrichments(
+  report: DiffReport,
+  current: ProjectIndex,
+  root: string,
+  threshold: 'info' | 'warn' | 'break',
+): Promise<DiffReport> {
+  let r = enrichWithManifestFindings(report, current, threshold);
+  r = enrichWithApiFindings(r, current, threshold);
+  r = enrichWithLintRuntimeFindings(r, current, threshold);
+  r = enrichWithLintWebappFindings(r, current, threshold);
+  r = enrichWithDocFindings(r, current, threshold);
+  r = await enrichWithEnvFindings(r, root, threshold);
+  return r;
+}
+
+/**
+ * Enrichit le rapport avec les findings d'environnement (V4 §29). No-op rapide
+ * si aucun `gaslens.workspace.json` n'est trouvé en remontant depuis `root` —
+ * la grande majorité des projets mono-repo restent ainsi non impactés.
+ */
+export async function enrichWithEnvFindings(
+  report: DiffReport,
+  root: string,
+  threshold: 'info' | 'warn' | 'break',
+): Promise<DiffReport> {
+  const env = await runEnvValidate({ root });
+  if (env.findings.length === 0) return report;
+  const extra = env.findings.filter((f) => keepBySeverity(f, threshold));
   if (extra.length === 0) return report;
   const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
   const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
