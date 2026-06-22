@@ -18,7 +18,8 @@ GAS-Lens **voit cette couture**. À chaque édition, il vérifie :
 - chaque `ScriptApp.newTrigger('runJob')` croisé avec l'existence de `runJob`,
 - chaque `SpreadsheetApp.getRange(...).getValuesAll()` (méthode hallucinée — la vraie c'est `getValues`),
 - chaque `setProperty('LAST_RUN')` (oublié l'argument `value`),
-- chaque librairie utilisée vs déclarée dans `appsscript.json`,
+- chaque librairie utilisée vs déclarée dans `appsscript.json` (et sa version : prod figée vs dev HEAD),
+- chaque id de ressource d'un **autre environnement** codé en dur dans un projet prod (fuite dev↔prod),
 - chaque `setValue()` glissé dans une boucle (quota épuisé en quelques secondes),
 - chaque `<a href>` sans `target="_top"` (clic bloqué par l'iframe de la web app)…
 
@@ -106,6 +107,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens doc stub <fn>` | Squelette JSDoc à compléter (params détectés) |
 | `gaslens doctor [root]` | Checklist de prérequis auto-vérifiant (Node/clasp/plugin/manifeste). `--hook --quiet-when-ok` pour SessionStart |
 | `gaslens workspace init <nom>` | Scaffold un workspace complet (manifeste maître, `.claude/settings.json`, `.mcp.json`, `apps/backlog/docs`) |
+| `gaslens workspace add-app <nom>` | Onboarde une app : entrée `apps[]` (2 projets dev/prod) + `apps/<nom>/{dev,prod}` + `CLAUDE.md` d'app + rappel `clasp clone` |
 | `gaslens manifest` | Croise code ↔ `appsscript.json` : libs/scopes/services avancés/`urlFetchWhitelist` |
 | `gaslens validate-api` | Méthodes GAS hallucinées + arity manquante + méthodes dépréciées |
 | `gaslens lint-runtime` | Anti-patterns quota/lock/trigger (warn/info) |
@@ -176,9 +178,11 @@ gaslens init --section claude-md --write
 gaslens init --section skill --write
 ```
 
-À chaque `Write`/`Edit`/`MultiEdit` sur un `.gs`/`.html`, le hook lance `gaslens check`. Si BREAK : Claude Code reçoit un `{decision:"block", reason:"…"}` qui ré-injecte la régression dans la boucle de raisonnement, avec les `fix_hint` actionnables.
+À chaque `Write`/`Edit`/`MultiEdit` sur un `.gs`/`.html`, le hook lance le **pipeline `check` complet** : diff structurel + manifest + validate-api + lint-runtime + lint-webapp + **`doc`** + **`env`**. Si BREAK : Claude Code reçoit un `{decision:"block", reason:"…"}` qui ré-injecte la régression dans la boucle de raisonnement, avec les `fix_hint` actionnables.
 
-Le hook utilise automatiquement le **scan incrémental** — l'overhead par édition est typiquement de quelques ms.
+Le hook utilise automatiquement le **scan incrémental** (détection par hash de contenu — fiable même juste après une écriture) — l'overhead par édition est typiquement de quelques ms.
+
+> **Installé via le plugin** (`/plugin install gaslens@gaslens`), tout est déjà câblé : le hook PostToolUse et le `gaslens doctor` au SessionStart. La méthode `init --section` ci-dessus reste utile pour un repo GAS simple sans plugin.
 
 ### Autres agents (Cursor, etc.) — serveur MCP
 
@@ -226,9 +230,38 @@ Tu as un monorepo avec plusieurs projets GAS qui se référencent via librairies
 gaslens scan ./monorepo   # auto-détecte tous les appsscript.json
 ```
 
-Les appels `CommonUtils.formatDate(...)` depuis `AppA` sont résolus vers la fonction réelle de `CommonUtils`, avec `caller_project` correctement renseigné et `cross_project_edges` exposés. `gaslens check` propage les régressions cross-projet.
+Les appels `CommonUtils.formatDate(...)` depuis `AppA` sont résolus vers la fonction réelle de `CommonUtils`, avec `caller_project` renseigné et `cross_project_edges` exposés. `gaslens check` propage les régressions cross-projet, et `gaslens map` montre le fournisseur résolu (`Core→apps/core/dev`).
 
-Pour cibler un sous-projet : `--project <nom>` sur les commandes consommatrices.
+- **Nommage** : en workspace, chaque projet est nommé par son **chemin relatif** à la racine (`apps/dash/dev`), ce qui évite toute collision avec le layout « 2 projets par app » (`apps/<app>/{dev,prod}`).
+- **Résolution cross-repo** : quand la bibliothèque partagée est un projet du workspace (préfixe ≠ nom de dossier), `scan` lit le **manifeste maître** (`gaslens.workspace.json`) pour mapper `library_prefix` → projet fournisseur, **env-aware** (un consommateur `dev` se lie au fournisseur `dev`).
+- **Cibler un projet** : `--project <suffixe>` accepte le chemin exact OU un suffixe — `--project dash/dev` (ou `--project dev` pour tous les `*/dev`).
+
+## Multi-environnements (dev/prod) & `env validate`
+
+GAS-Lens modélise un parc **agent-friendly** via un manifeste maître
+`gaslens.workspace.json` (source de vérité : apps, bibliothèque mère,
+environnements, ressources). Deux environnements par webapp (`dev`/`prod`),
+isolation « hard » : projets séparés, ressources séparées, bibliothèque unique
+(HEAD en dev / version figée en prod).
+
+```bash
+gaslens workspace init mon-parc      # scaffold le manifeste + l'arbo
+gaslens workspace add-app dashboard  # ajoute une app (2 projets dev/prod)
+gaslens env validate                 # valide les deux axes d'environnement
+```
+
+`gaslens env validate` (intégré au pipeline `check`, donc au hook) attrape :
+
+- **`env.cross_env_leak`** (BREAK, le *finding-roi*) : un projet `prod` qui embarque en dur l'id d'une ressource `dev` (ou l'inverse) — il lirait/écrirait le **mauvais** environnement.
+- **`env.library_version_mismatch`** (BREAK) : un `prod` qui consomme la bibliothèque en HEAD/dev au lieu de la version figée.
+- **`env.hardcoded_resource`** (WARN) : un id de ressource codé en dur (du bon env, OU **non déclaré** au manifeste — détecté via `openById`/`getFileById`/…).
+- **`env.undeclared_resource`** (WARN) : une ressource déclarée dans un env mais absente d'un autre (parc sous-provisionné).
+
+Le `gaslens doctor` (lancé au SessionStart) complète le tableau : Node ≥ 22, `clasp` connecté, cohérence `.clasp.json` ↔ manifeste, ADC, baseline par projet, plugin câblé.
+
+## Distribution : moteur npm + plugin Claude Code
+
+GAS-Lens part d'**un seul repo, deux faces** (V5) : le moteur (`src/`, `bin/` → npm `@malolecouls/gaslens`) et le **plugin Claude Code** (`.claude-plugin/`, `skills/`, `commands/`, `hooks/`, `.mcp.json`, `templates/`). Installer le plugin (`/plugin install gaslens@gaslens`) câble d'un coup les 7 skills, les slash commands, le hook PostToolUse, le `doctor` au SessionStart et le MCP Chrome DevTools (les « yeux » qui pilotent le `/exec` réel).
 
 ### Librairies externes (V3 §22.1)
 
@@ -301,7 +334,7 @@ Sur un petit projet (7 fichiers, 23 fonctions) :
 
 `gaslens scan --bench` affiche le breakdown des phases sur `stderr`. Sur de plus gros projets, le gain incrémental est proportionnel au ratio fichiers inchangés / total.
 
-L'incrémental garantit **correctness > perf** : tout changement détecté incertain (HTML modifié, `appsscript.json` modifié) déclenche un full scan. Pas de faux positif.
+L'incrémental garantit **correctness > perf** : la détection « rien n'a changé » se fait par **hash de contenu** (jamais par mtime — non fiable juste après une écriture sur certains OS/FS, ce qui ferait rater une édition). Tout changement incertain (HTML modifié, `appsscript.json` modifié) déclenche un full scan. Pas de faux négatif silencieux.
 
 ---
 
@@ -321,7 +354,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 418 tests
+npm test            # vitest run — 440 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```
@@ -330,7 +363,9 @@ Conception complète :
 - [`gas-lens-conception.md`](gas-lens-conception.md) (V1, philosophie + modèle GAS)
 - [`gas-lens-conception-2-verification-et-agent.md`](gas-lens-conception-2-verification-et-agent.md) (V2, moteur de vérification + intégration agent)
 - [`gas-lens-conception-3-usages-agent-et-extensions.md`](gas-lens-conception-3-usages-agent-et-extensions.md) (V3, usages agent + extensions)
-- [`CLAUDE.md`](CLAUDE.md) (index opérationnel)
+- [`gas-lens-conception-4-conventions-et-articulation.md`](gas-lens-conception-4-conventions-et-articulation.md) (V4, conventions agent + 2 axes d'environnement)
+- [`gas-lens-conception-5-installation-et-packaging.md`](gas-lens-conception-5-installation-et-packaging.md) (V5, installation + packaging npm/plugin)
+- [`ROADMAP.md`](ROADMAP.md) (implémentation des LOTs A→E) · [`CLAUDE.md`](CLAUDE.md) (index opérationnel)
 
 ---
 
