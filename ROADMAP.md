@@ -119,32 +119,28 @@ Ordre de marche conseillé : **A → B → C → D**. `A1` (schéma manifeste) e
 
 ### Correctifs priorisés
 
-- [ ] **E1 (P0) — Nommage de projet désambiguïsé.** En mode workspace, nommer chaque projet par
-  son **chemin relatif à la racine** (POSIX), p. ex. `apps/dash/dev` (le plat `AppA` reste
-  inchangé). `--project` accepte le chemin exact OU un suffixe (`dash/dev`) ; ambigu → liste les
-  candidats. Corrige **G1**.
-- [ ] **E2 (P0) — Résolution cross-repo via le manifeste maître.** `scan`/`check` lisent
-  (optionnellement) `gaslens.workspace.json` pour mapper `library_prefix`/`library.script_id` →
-  projet fournisseur, et résoudre les appels `Lib.fn()` inter-repos en `cross_project_edges`
-  (env-aware : un consommateur `dev` se lie au fournisseur `dev`). Corrige **G2** → la
-  propagation de régression cross-repo fonctionne enfin.
-- [ ] **E3 (P1) — `doctor` durci.** Vérifier : cohérence `.clasp.json` ↔ `script_id` du manifeste
-  (par app) ; présence de l'**ADC** (`gcloud auth application-default`) ; **baseline par app**
-  (itérer `apps[]`) ; déclaration réelle du plugin dans `.claude/settings.json`. → l'agent
-  demande les prérequis **avant** d'échouer.
-- [ ] **E4 (P1) — `gaslens workspace add-app <nom>`.** Crée `apps/<nom>/{dev,prod}`, écrit
-  l'entrée `apps[]` + les ressources squelette dans le manifeste, copie le fragment
-  `claude-md/app.md`, et rappelle `clasp clone`/`clasp create`. Réduit la partie la plus
-  manuelle/risquée du parcours.
-- [ ] **E5 (P2 / ex-A2-ter) — Extracteur de littéraux de ressources.** Capturer les littéraux
-  « qui ressemblent à un id de ressource Google » dans l'index → `env validate` flague aussi les
-  ids **non déclarés** (plus seulement ceux du manifeste) et sert le hot-path sans relire les
-  sources. Lève la limite de `cross_env_leak`.
+- [x] **E1 (P0) — Nommage de projet désambiguïsé.** `scanWorkspace` nomme chaque projet par son
+  chemin relatif POSIX (`apps/dash/dev`) ; le plat `AppA` reste inchangé. `scanProject` accepte
+  `projectName`. Corrige **G1**. (`tests/multirepo.test.ts`)
+- [x] **E2 (P0) — Résolution cross-repo via le manifeste maître.** `scanWorkspace` lit
+  `gaslens.workspace.json` (`loadLibraryProviders`) → mappe `library_prefix` → projet fournisseur
+  et résout les appels inter-repos en `cross_project_edges`, **env-aware** (dev→dev, prod→prod).
+  Corrige **G2**. ⚡ Bonus : fast-path incrémental passé de mtime (non fiable) à **hash** →
+  fin d'un trou de fiabilité du hook (édition même-ms ratée). (V5)
+- [x] **E3 (P1) — `doctor` durci.** `clasp-config` (.clasp.json ↔ `script_id`, WARN si divergent),
+  `adc` (Application Default Credentials, INFO), `baselines` (par app, INFO si absente),
+  `plugin-enabled` (déclaration réelle dans `.claude/settings.json`).
+- [x] **E4 (P1) — `gaslens workspace add-app <nom>`.** Ajoute l'entrée `apps[]` (2 projets
+  dev/prod), crée `apps/<nom>/{dev,prod}` + `CLAUDE.md` d'app, rappelle `clasp clone`. `script_id`
+  rendu optionnel (déclaré avant le clone).
+- [x] **E5 (P2 / ex-A2-ter) — ids de ressources non déclarés.** `env validate` flague les littéraux
+  passés à `openById/getFileById/...` non déclarés au manifeste → `env.hardcoded_resource`. Lève
+  la limite de `cross_env_leak`. ↳ *Migration vers extracteur d'index (hot-path) : différée
+  (refinement perf, agrégation incrémentale fragile).*
 
-### Preuve de réalisation
-Re-jouer la simulation multi-repo : après E1+E2, attendre `projects` à noms distincts
-(`apps/dash/dev`…) et `cross_project_edges` non vide (Core.formatDate ← dash). Test
-d'intégration dédié (`tests/multirepo.test.ts`).
+### Preuve de réalisation ✅
+`tests/multirepo.test.ts` : noms distincts (`apps/dash/dev`…) + `cross_project_edges` résolus
+env-aware (Core.formatDate ← dash) + propagation au caller. Simulation CLI rejouée OK.
 
 ---
 
