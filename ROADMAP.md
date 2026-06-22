@@ -89,6 +89,65 @@ Ordre de marche conseillé : **A → B → C → D**. `A1` (schéma manifeste) e
 
 ---
 
+## 🟥 LOT E — Durcissement multi-repo & ergonomie agent
+
+> Issu d'une **simulation réelle** d'un workspace multi-repo (lib partagée `Core` +
+> webapps `dash`/`intake`, avec erreurs piégées). `env validate` a attrapé les 3 pièges
+> (cross_env_leak, library_version_mismatch, undeclared_resource, exit 3 ✓), MAIS la
+> simulation a exposé des trous entre la topologie V4/V5 (2 projets par app) et le moteur
+> `scan`/workspace (conçu pour un monorepo plat V1-V3). Objectif du lot : que l'outil
+> **aide massivement** un agent sur un vrai parc multi-repo, pas seulement sur 1 app.
+
+### Constats de la simulation (la preuve)
+
+- **G1 — Collision de noms de projet.** Le layout prescrit `apps/<app>/{dev,prod}` fait que
+  `scan` nomme par `basename` → `projects: dev, prod, dev, prod, dev, prod` (6 projets, 2 noms).
+  `--project` devient ambigu, impossible de cibler `dash/dev`, sorties `doc lint` illisibles.
+- **G2 — Edges cross-repo non résolus.** La lib partagée `Core` est vue `external`,
+  `cross_project_edges: []`. Un changement de signature dans `Core` **ne propage aucune
+  régression** vers `dash`/`intake`. Cause : `scan` ne lit pas le manifeste maître, donc ne
+  mappe pas `library_prefix`/`script_id` → projet `core`.
+- **Coutures setup/auth non gardées** : (a) `script_id` du manifeste vs `.clasp.json` de
+  chaque projet — aucune création/sync/validation, drift silencieux = push sur le mauvais
+  projet ; (b) `doctor` ne vérifie pas l'**ADC** (requis par resolve-live/prod-truth/deploy-aware) ;
+  (c) `doctor` ne vérifie pas la **baseline par projet** (le hook skip en silence sinon) ;
+  (d) `doctor` « plugin activé » ne teste que la présence de `.claude/settings.json`.
+- **Limites honnêtes du modèle** : `cross_env_leak` n'attrape qu'un id **déclaré** ; un id en
+  dur **oublié** passe ; `undeclared_resource` est pure cohérence manifeste (un projet qui
+  hardcode tout sans rien déclarer ressort CLEAN) ; `plugin.json` non testé contre le chargeur
+  réel de Claude Code.
+
+### Correctifs priorisés
+
+- [ ] **E1 (P0) — Nommage de projet désambiguïsé.** En mode workspace, nommer chaque projet par
+  son **chemin relatif à la racine** (POSIX), p. ex. `apps/dash/dev` (le plat `AppA` reste
+  inchangé). `--project` accepte le chemin exact OU un suffixe (`dash/dev`) ; ambigu → liste les
+  candidats. Corrige **G1**.
+- [ ] **E2 (P0) — Résolution cross-repo via le manifeste maître.** `scan`/`check` lisent
+  (optionnellement) `gaslens.workspace.json` pour mapper `library_prefix`/`library.script_id` →
+  projet fournisseur, et résoudre les appels `Lib.fn()` inter-repos en `cross_project_edges`
+  (env-aware : un consommateur `dev` se lie au fournisseur `dev`). Corrige **G2** → la
+  propagation de régression cross-repo fonctionne enfin.
+- [ ] **E3 (P1) — `doctor` durci.** Vérifier : cohérence `.clasp.json` ↔ `script_id` du manifeste
+  (par app) ; présence de l'**ADC** (`gcloud auth application-default`) ; **baseline par app**
+  (itérer `apps[]`) ; déclaration réelle du plugin dans `.claude/settings.json`. → l'agent
+  demande les prérequis **avant** d'échouer.
+- [ ] **E4 (P1) — `gaslens workspace add-app <nom>`.** Crée `apps/<nom>/{dev,prod}`, écrit
+  l'entrée `apps[]` + les ressources squelette dans le manifeste, copie le fragment
+  `claude-md/app.md`, et rappelle `clasp clone`/`clasp create`. Réduit la partie la plus
+  manuelle/risquée du parcours.
+- [ ] **E5 (P2 / ex-A2-ter) — Extracteur de littéraux de ressources.** Capturer les littéraux
+  « qui ressemblent à un id de ressource Google » dans l'index → `env validate` flague aussi les
+  ids **non déclarés** (plus seulement ceux du manifeste) et sert le hot-path sans relire les
+  sources. Lève la limite de `cross_env_leak`.
+
+### Preuve de réalisation
+Re-jouer la simulation multi-repo : après E1+E2, attendre `projects` à noms distincts
+(`apps/dash/dev`…) et `cross_project_edges` non vide (Core.formatDate ← dash). Test
+d'intégration dédié (`tests/multirepo.test.ts`).
+
+---
+
 ### Chemin critique « démo jour-1 »
 Si la distribution prime : **C5 + C1 + B1 + B2** suffisent à `npm i -g` → `workspace init` →
 `/plugin install` → `doctor`.
