@@ -17,14 +17,16 @@ deux projets `dev`/`prod`, déclarée dans le manifeste maître, indexée.
 
 ## Scaffolding
 
-1. Créer `apps/<app>/{dev,prod}/` ; `clasp clone <scriptId>` (ou `clasp create`)
-   dans chacun.
-2. **Manifeste maître** : ajouter l'entrée `apps[]` avec
-   `projects.{dev,prod}.{script_id,clasp_path}` (+ `library_prefix` si lib).
-   Déclarer les ressources par env dans `environments.<env>.resources`.
-3. **CLAUDE.md d'app** : copier `templates/claude-md/app.md` → `apps/<app>/CLAUDE.md`
-   (renseigner entry points, préfixe lib, ressources).
-4. **Index** : `gaslens scan apps/<app>/dev -o apps/<app>/dev/.gaslens/baseline.json`.
+1. **`gaslens workspace add-app <app> [--library-prefix <X>]`** — crée
+   `apps/<app>/{dev,prod}`, ajoute l'entrée `apps[]` au manifeste maître (2
+   projets) et un `CLAUDE.md` d'app. Imprime les prochaines étapes.
+2. `clasp clone <scriptId>` (ou `clasp create`) dans `apps/<app>/{dev,prod}`,
+   puis **renseigner les `script_id`** dans `gaslens.workspace.json` (laissés
+   vides par `add-app`, connus après le clone).
+3. **Ressources** : déclarer par env dans `environments.<env>.resources`
+   (provisionner les ressources dev via la skill `provision-env`).
+4. **Index** : `gaslens scan apps/<app>/dev -o apps/<app>/dev/.gaslens/baseline.json`
+   (sinon le hook reste silencieux pour ce projet — `gaslens doctor` le signale).
 5. **Valider** : `gaslens env validate apps/<app>/prod` doit être CLEAN
    (lib figée en prod, pas d'id de ressource en dur).
 
