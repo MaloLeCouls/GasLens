@@ -214,7 +214,8 @@ function mcpJson(): string {
         mcpServers: {
           'chrome-devtools': {
             command: 'npx',
-            args: ['-y', 'chrome-devtools-mcp@latest', '--autoConnect'],
+            // Version épinglée (V5 §37.8) : stabilise l'installation dans le temps.
+            args: ['-y', 'chrome-devtools-mcp@1.3.0', '--autoConnect'],
           },
         },
       },

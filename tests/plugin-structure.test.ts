@@ -52,11 +52,14 @@ describe('plugin — hooks & mcp', () => {
     expect(start.hooks[0].command).toContain('--quiet-when-ok');
   });
 
-  it('.mcp.json déclare chrome-devtools en --autoConnect', () => {
+  it('.mcp.json déclare chrome-devtools en --autoConnect, version épinglée', () => {
     const m = readJson('.mcp.json');
     const chrome = m.mcpServers['chrome-devtools'];
     expect(chrome.command).toBe('npx');
     expect(chrome.args).toContain('--autoConnect');
+    const pkg = (chrome.args as string[]).find((a) => a.startsWith('chrome-devtools-mcp@'));
+    expect(pkg).toBeDefined();
+    expect(pkg).not.toBe('chrome-devtools-mcp@latest'); // épinglé (V5 §37.8)
   });
 });
 

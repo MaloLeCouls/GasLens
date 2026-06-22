@@ -28,16 +28,43 @@ Doctrine : **`break` est sacré, réservé aux régressions structurellement cer
 
 ## Installation
 
+GAS-Lens se distribue sur **deux canaux qui partent du même repo** (V5) : le
+*moteur* (paquet npm) et la *couche agent* (plugin Claude Code).
+
+**1. Le moteur (npm) — en une commande :**
+
 ```bash
-git clone https://github.com/MaloLeCouls/GasLens.git
-cd GasLens
-npm install
-npm run build
+npm i -g @malolecouls/gaslens     # binaires `gaslens` et `gaslens-mcp` globaux
 ```
 
-Binaires disponibles à `./bin/gaslens.js` et `./bin/gaslens-mcp.js`. `npm link` pour avoir les alias `gaslens` / `gaslens-mcp` globaux.
+**2. La couche agent (plugin Claude Code) — skills + hooks + slash commands + MCP :**
 
-Prérequis : Node.js 20+. Aucun token, aucune API à activer, aucun déploiement nécessaire.
+```text
+/plugin marketplace add MaloLeCouls/GasLens
+/plugin install gaslens@gaslens
+```
+
+**3. Scaffolder un workspace prêt à l'emploi :**
+
+```bash
+gaslens workspace init mon-parc   # manifeste maître, .claude/settings.json, .mcp.json, apps/…
+cd mon-parc && claude             # le SessionStart lance `gaslens doctor` et liste ce qui manque
+```
+
+Prérequis : **Node.js 22+** (requis par `chrome-devtools-mcp`). Pour le cœur
+d'analyse : aucun token, aucune API, aucun déploiement. `gaslens doctor` vérifie
+les prérequis tout seul.
+
+> **Dev / depuis les sources :** `git clone … && npm install && npm run build`,
+> puis `npm link` pour les alias globaux.
+
+### Épingler les versions (stabiliser l'installation)
+
+- **Plugin** : pinne la marketplace sur un tag de release —
+  `/plugin marketplace add MaloLeCouls/GasLens#v0.1.0` (crée le tag `vX.Y.Z` au
+  moment de publier une version).
+- **MCP Chrome** : `.mcp.json` épingle déjà `chrome-devtools-mcp@1.3.0` (pas
+  `@latest`) pour que l'install reste reproductible dans le temps.
 
 ---
 
@@ -73,7 +100,12 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens inspect <fn>` | Signature, callers, callees, contrat de retour inféré, coverage |
 | `gaslens impact <fn> --change <dsl>` | Régressions potentielles d'une mutation décrite |
 | `gaslens diff --from <idx> --to <idx>` | Compare deux index, change set sémantique dérivé |
-| `gaslens check --baseline <idx>` | Diff + manifest + validate-api + lint-runtime + lint-webapp |
+| `gaslens check --baseline <idx>` | Diff + manifest + validate-api + lint-runtime + lint-webapp + **doc** + **env** |
+| `gaslens env validate [root]` | Deux axes d'environnement (V4) : `library_version_mismatch` (lib dev=HEAD/prod=figée) + `cross_env_leak` / `hardcoded_resource` / `undeclared_resource` (manifeste maître) |
+| `gaslens doc lint` | Fonctions sans intention (`doc.undocumented`) + `@param` en dérive (`doc.param_drift`). N'écrit jamais la prose |
+| `gaslens doc stub <fn>` | Squelette JSDoc à compléter (params détectés) |
+| `gaslens doctor [root]` | Checklist de prérequis auto-vérifiant (Node/clasp/plugin/manifeste). `--hook --quiet-when-ok` pour SessionStart |
+| `gaslens workspace init <nom>` | Scaffold un workspace complet (manifeste maître, `.claude/settings.json`, `.mcp.json`, `apps/backlog/docs`) |
 | `gaslens manifest` | Croise code ↔ `appsscript.json` : libs/scopes/services avancés/`urlFetchWhitelist` |
 | `gaslens validate-api` | Méthodes GAS hallucinées + arity manquante + méthodes dépréciées |
 | `gaslens lint-runtime` | Anti-patterns quota/lock/trigger (warn/info) |
@@ -279,7 +311,7 @@ L'incrémental garantit **correctness > perf** : tout changement détecté incer
 
 ```bash
 gaslens eval
-# → 15/15 tâches PASS, taux de détection 100 %
+# → 18/18 tâches PASS, taux de détection 100 %
 ```
 
 Toute régression de détection casse une tâche → le test vitest correspondant échoue. Discipline : **chaque nouvelle règle s'accompagne d'au moins une tâche d'éval + un test unitaire**.
@@ -289,7 +321,7 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 357 tests
+npm test            # vitest run — 418 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
 ```
@@ -304,6 +336,6 @@ Conception complète :
 
 ## Stack
 
-Node.js 20+ · TypeScript (`strict`, `noUncheckedIndexedAccess`) · [`tree-sitter-javascript`](https://github.com/tree-sitter/tree-sitter-javascript) · `commander` · `vitest`. MCP server via [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk). Testé sur Windows / macOS / Linux.
+Node.js 22+ · TypeScript (`strict`, `noUncheckedIndexedAccess`) · [`tree-sitter-javascript`](https://github.com/tree-sitter/tree-sitter-javascript) · `commander` · `zod` · `vitest`. MCP server via [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk). Testé sur Windows / macOS / Linux.
 
 Pas de réseau, pas d'auth, pas de déploiement nécessaire — tout le cœur tourne hors-ligne.

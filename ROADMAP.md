@@ -77,11 +77,15 @@ Ordre de marche conseillé : **A → B → C → D**. `A1` (schéma manifeste) e
 
 ## 🟧 LOT D — Validation & durcissement
 
-- [ ] **D1 — Éval d'installation « jour-1 à blanc »** sur machine vierge (pendant des évals
-  d'analyse V1 §5). (V5 §37.7)
-- [ ] **D2 — Épingler les versions** : plugin `#vX`, `chrome-devtools-mcp@<pin>`. (V5 §37.8)
-- [ ] **D3 — Google Site routeur** documenté dans le `CLAUDE.md` d'app + `emit-dts` référencé
-  côté client HTML. (V4 §30.7–30.8)
+- [x] **D1 — Éval d'installation « jour-1 à blanc »** : test d'intégration de bout en bout
+  (scaffold → doctor → onboard app → env validate → scan/doc lint) → `tests/install-flow.test.ts`
+  (2 tests). (V5 §37.7)
+- [x] **D2 — Épingler les versions** : `chrome-devtools-mcp@1.3.0` dans les deux `.mcp.json`
+  (racine + scaffolder) + garde-fou de test « pas `@latest` » ; pin plugin `#vX` documenté (README).
+  (V5 §37.8)
+- [x] **D3 — Google Site routeur** + **`emit-dts` côté client** documentés dans
+  `templates/claude-md/app.md` (la référence triple-slash `/// <reference>` est déjà émise par
+  `emit-dts`). (V4 §30.7–30.8)
 
 ---
 
