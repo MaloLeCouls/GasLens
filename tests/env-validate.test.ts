@@ -105,6 +105,37 @@ describe('env validate — axe RESSOURCES', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('WARN env.hardcoded_resource pour un id NON déclaré via openById (E5)', async () => {
+    const UNDECLARED = 'UNDECLARED_ID_ABCDEFGHIJKLMNOPQRSTUV';
+    const root = await makeWorkspace(CLEAN_DEV, {
+      lib: CLEAN_PROD.lib,
+      code: `function open_() { return DriveApp.getFileById('${UNDECLARED}'); }`,
+    });
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      const hc = r.findings.find(
+        (f) => f.consumer_kind === 'env.hardcoded_resource' && f.reason.includes(UNDECLARED),
+      );
+      expect(hc).toBeDefined();
+      expect(hc?.reason).toContain('NON déclaré');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ne flague pas un littéral court / non id-shaped passé à openById', async () => {
+    const root = await makeWorkspace(CLEAN_DEV, {
+      lib: CLEAN_PROD.lib,
+      code: `function open_() { return SpreadsheetApp.openById('short'); }`,
+    });
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      expect(r.findings.some((f) => f.reason.includes('short'))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('env validate — axe CODE', () => {

@@ -287,9 +287,10 @@ export async function checkResourceLeaks(
   target: ValidatedTarget,
   ownerIndex: Map<string, Array<{ env: string; logical: string }>>,
 ): Promise<Finding[]> {
-  if (ownerIndex.size === 0) return [];
   const findings: Finding[] = [];
   const sources = await listSourceFiles(target.dir);
+  const declaredIds = new Set(ownerIndex.keys());
+  const symbol = `${target.app}::env::${target.env}`;
 
   for (const file of sources) {
     let text: string;
@@ -298,42 +299,62 @@ export async function checkResourceLeaks(
     } catch {
       continue;
     }
-    const lines = text.split('\n');
-    for (const [id, owners] of ownerIndex) {
-      const envsOwning = new Set(owners.map((o) => o.env));
-      const ownedByThisEnv = envsOwning.has(target.env);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? '';
-        if (!line.includes(id)) continue;
-        const rel = relative(target.dir, file).replace(/\\/g, '/');
-        const consumer = { file: rel, line: i + 1 };
-        const symbol = `${target.app}::env::${target.env}`;
-        if (ownedByThisEnv) {
-          findings.push({
-            severity: 'warn',
-            symbol,
-            consumer,
-            consumer_kind: 'env.hardcoded_resource',
-            reason:
-              `id de ressource '${id}' (${describeOwners(owners)}) codé en dur dans le projet '${target.app}' [${target.env}] — ` +
-              `même si l'environnement est correct, l'id devrait passer par Config/Script Properties pour rester promouvable`,
-            fix_hint: `remplacer le littéral par une lecture de propriété (ex: Config.get('${owners.find((o) => o.env === target.env)?.logical ?? 'maRessource'}'))`,
-            confidence: 'medium',
-          });
-        } else {
-          findings.push({
-            severity: 'break',
-            symbol,
-            consumer,
-            consumer_kind: 'env.cross_env_leak',
-            reason:
-              `FUITE INTER-ENV : le projet '${target.app}' [${target.env}] embarque en dur l'id de ressource '${id}' ` +
-              `qui appartient à ${describeOwners(owners)} — ce projet lira/écrira les données du MAUVAIS environnement`,
-            fix_hint: `retirer l'id en dur et lire la ressource via Config/Script Properties scopées à l'environnement '${target.env}'`,
-            confidence: 'high',
-          });
+    const rel = relative(target.dir, file).replace(/\\/g, '/');
+
+    // a) ids DÉCLARÉS apparaissant en dur → fuite inter-env ou hardcode du bon env.
+    if (ownerIndex.size > 0) {
+      const lines = text.split('\n');
+      for (const [id, owners] of ownerIndex) {
+        const ownedByThisEnv = owners.some((o) => o.env === target.env);
+        for (let i = 0; i < lines.length; i++) {
+          if (!(lines[i] ?? '').includes(id)) continue;
+          const consumer = { file: rel, line: i + 1 };
+          if (ownedByThisEnv) {
+            findings.push({
+              severity: 'warn',
+              symbol,
+              consumer,
+              consumer_kind: 'env.hardcoded_resource',
+              reason:
+                `id de ressource '${id}' (${describeOwners(owners)}) codé en dur dans le projet '${target.app}' [${target.env}] — ` +
+                `même si l'environnement est correct, l'id devrait passer par Config/Script Properties pour rester promouvable`,
+              fix_hint: `remplacer le littéral par une lecture de propriété (ex: Config.get('${owners.find((o) => o.env === target.env)?.logical ?? 'maRessource'}'))`,
+              confidence: 'medium',
+            });
+          } else {
+            findings.push({
+              severity: 'break',
+              symbol,
+              consumer,
+              consumer_kind: 'env.cross_env_leak',
+              reason:
+                `FUITE INTER-ENV : le projet '${target.app}' [${target.env}] embarque en dur l'id de ressource '${id}' ` +
+                `qui appartient à ${describeOwners(owners)} — ce projet lira/écrira les données du MAUVAIS environnement`,
+              fix_hint: `retirer l'id en dur et lire la ressource via Config/Script Properties scopées à l'environnement '${target.env}'`,
+              confidence: 'high',
+            });
+          }
         }
       }
+    }
+
+    // b) ids NON déclarés passés à un appel d'ouverture de ressource (E5) :
+    //    lève la limite « cross_env_leak ne voit que les ids déclarés ». Ancré
+    //    sur openById/getFileById/... → faux positifs quasi nuls.
+    for (const hit of findResourceOpenLiterals(text)) {
+      if (declaredIds.has(hit.value)) continue; // déjà couvert par (a)
+      if (!looksLikeResourceId(hit.value)) continue;
+      findings.push({
+        severity: 'warn',
+        symbol,
+        consumer: { file: rel, line: hit.line },
+        consumer_kind: 'env.hardcoded_resource',
+        reason:
+          `id de ressource '${hit.value}' codé en dur (via ${hit.api}) et NON déclaré dans le manifeste maître — ` +
+          `l'isolation dev/prod n'est pas garantie ; cet id pourrait pointer le mauvais environnement sans que gaslens puisse le savoir`,
+        fix_hint: `déclarer la ressource dans environments.${target.env}.resources et la lire via Config/Script Properties, ou retirer l'id en dur`,
+        confidence: 'medium',
+      });
     }
   }
   return findings;
@@ -341,6 +362,34 @@ export async function checkResourceLeaks(
 
 function describeOwners(owners: Array<{ env: string; logical: string }>): string {
   return owners.map((o) => `${o.env}.${o.logical}`).join(', ');
+}
+
+/** APIs GAS qui ouvrent une ressource par id littéral (bare id, pas URL). */
+const RESOURCE_OPEN_RE =
+  /\b(openById|getFileById|getFolderById|getFormById|getDocumentById|getSpreadsheetById)\s*\(\s*['"]([^'"]+)['"]/g;
+
+interface ResourceOpenHit {
+  value: string;
+  line: number;
+  api: string;
+}
+
+function findResourceOpenLiterals(text: string): ResourceOpenHit[] {
+  const out: ResourceOpenHit[] = [];
+  RESOURCE_OPEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = RESOURCE_OPEN_RE.exec(text)) !== null) {
+    const api = m[1] ?? '';
+    const value = m[2] ?? '';
+    const line = text.slice(0, m.index).split('\n').length;
+    out.push({ value, line, api });
+  }
+  return out;
+}
+
+/** Un id de ressource Google : long, jeu de caractères base64url-ish. */
+function looksLikeResourceId(v: string): boolean {
+  return /^[A-Za-z0-9_-]{20,}$/.test(v);
 }
 
 const SOURCE_EXTS = ['.gs', '.html', '.htm', '.js'];
