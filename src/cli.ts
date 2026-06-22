@@ -43,6 +43,7 @@ import {
   writeWorkspace,
   gitInitAndCommit,
 } from './workspace-init.js';
+import { runAddApp } from './workspace-add-app.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -1551,6 +1552,36 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       );
     });
 
+  workspace
+    .command('add-app')
+    .description(
+      "Onboarde une app dans le workspace courant (E4) : ajoute l'entrée apps[] " +
+        "au manifeste maître (2 projets dev/prod), crée apps/<nom>/{dev,prod} + " +
+        "CLAUDE.md d'app, et rappelle les étapes clasp clone. scriptId renseigné " +
+        "après le clone.",
+    )
+    .argument('<nom>', "Nom de l'app à ajouter")
+    .option('--library-prefix <prefix>', "Préfixe d'exposition si l'app est une librairie")
+    .option('--force', 'Écraser les fichiers existants', false)
+    .action(async (nom: string, opts: AddAppCliOpts) => {
+      const res = await runAddApp(resolve('.'), {
+        name: nom,
+        libraryPrefix: opts.libraryPrefix,
+        force: opts.force,
+      });
+      if (!res.ok) {
+        process.stderr.write(`gaslens workspace add-app: ${res.message}\n`);
+        process.exit(2);
+      }
+      for (const w of res.written ?? []) process.stderr.write(`  + ${w}\n`);
+      process.stdout.write(`gaslens workspace add-app: ${res.message}\n`);
+      if (res.nextSteps && res.nextSteps.length > 0) {
+        process.stdout.write('Prochaines étapes :\n');
+        for (const s of res.nextSteps) process.stdout.write(`  - ${s}\n`);
+      }
+      process.exit(0);
+    });
+
   program
     .command('doctor')
     .description(
@@ -1706,6 +1737,11 @@ interface WorkspaceInitCliOpts {
   force: boolean;
 }
 
+interface AddAppCliOpts {
+  libraryPrefix?: string;
+  force: boolean;
+}
+
 interface CommandOverviewEntry {
   name: string;
   tldr: string;
@@ -1729,6 +1765,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'doc stub <fn>', tldr: 'squelette JSDoc à compléter (params détectés)', reads_index: true, emits_findings: false },
   { name: 'doctor [root]', tldr: 'checklist prérequis auto-vérifiant (Node/clasp/plugin/manifeste) ; --hook --quiet-when-ok', reads_index: false, emits_findings: false },
   { name: 'workspace init <nom>', tldr: 'scaffold workspace (manifeste, .claude/settings, .mcp.json, apps/backlog/docs)', reads_index: false, emits_findings: false },
+  { name: 'workspace add-app <nom>', tldr: 'onboarde une app (entrée manifeste + apps/<nom>/{dev,prod} + rappel clasp clone)', reads_index: false, emits_findings: false },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },

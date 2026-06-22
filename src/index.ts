@@ -17,6 +17,8 @@ export { runDoctor } from './doctor.js';
 export type { DoctorReport, DoctorCheck } from './doctor.js';
 export { buildWorkspaceFiles, writeWorkspace } from './workspace-init.js';
 export type { WorkspaceInitOptions } from './workspace-init.js';
+export { planAddApp, runAddApp } from './workspace-add-app.js';
+export type { AddAppOptions } from './workspace-add-app.js';
 export type {
   ProjectIndex,
   WorkspaceIndex,

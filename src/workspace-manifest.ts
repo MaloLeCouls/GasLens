@@ -25,7 +25,12 @@ export const WORKSPACE_MANIFEST_FILENAME = 'gaslens.workspace.json';
 
 /** Référence à un projet Apps Script concret (un script_id = un projet). */
 export const ProjectRefSchema = z.object({
-  script_id: z.string().min(1),
+  /**
+   * scriptId Apps Script du projet. Optionnel : un projet peut être déclaré
+   * (par `workspace add-app`) AVANT d'être cloné/créé ; le scriptId est alors
+   * renseigné après `clasp clone`/`clasp create`. S'il est présent, non vide.
+   */
+  script_id: z.string().min(1).optional(),
   /** Chemin (relatif au workspace) du dossier clasp de ce projet. */
   clasp_path: z.string().optional(),
   /** deployment ID stable (prod surtout — promote = republier sur le même). */
