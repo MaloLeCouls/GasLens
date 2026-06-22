@@ -2059,19 +2059,26 @@ function parseUnitFloat(v: string, flag: string): number {
   return n;
 }
 
-function pickManifestTargets(
+/**
+ * Sélectionne les projets ciblés par `--project`. Accepte le **chemin exact**
+ * (`apps/dash/dev`) OU un **suffixe** (`dash/dev`, voire `dev`) — ergonomie
+ * agent : depuis E1 les noms de projet sont des chemins relatifs, souvent longs.
+ * Un suffixe ambigu (`dev` matche plusieurs apps) renvoie tous les candidats
+ * (la commande les traite tous) — passe un suffixe plus spécifique pour cibler.
+ */
+export function pickManifestTargets(
   raw: ProjectIndex | WorkspaceIndex,
   projectFilter: string | undefined,
 ): ProjectIndex[] {
+  const matches = (name: string): boolean =>
+    !projectFilter || name === projectFilter || name.endsWith('/' + projectFilter);
   if (raw.kind !== 'workspace') {
-    if (projectFilter && raw.project !== projectFilter) return [];
-    return [raw];
+    return matches(raw.project) ? [raw] : [];
   }
-  if (projectFilter) {
-    const found = raw.projects.find((p) => p.project === projectFilter);
-    return found ? [found] : [];
-  }
-  return raw.projects;
+  if (!projectFilter) return raw.projects;
+  const exact = raw.projects.find((p) => p.project === projectFilter);
+  if (exact) return [exact];
+  return raw.projects.filter((p) => p.project.endsWith('/' + projectFilter));
 }
 
 function parseManifestThreshold(v: string): number {
