@@ -227,6 +227,95 @@ describe('env validate — axe CODE', () => {
   });
 });
 
+describe('env validate — library_scope_missing cross-projet (G1)', () => {
+  function masterWithProvider(): string {
+    return JSON.stringify({
+      version: 1,
+      name: 'parc',
+      apps: [
+        {
+          name: 'core',
+          library_prefix: 'Core',
+          projects: {
+            dev: { script_id: 'CORE_DEV', clasp_path: 'apps/core/dev' },
+            prod: { script_id: LIB_ID, clasp_path: 'apps/core/prod' },
+          },
+        },
+        {
+          name: 'dash',
+          projects: {
+            dev: { script_id: 'DASH_DEV', clasp_path: 'apps/dash/dev' },
+            prod: { script_id: 'DASH_PROD', clasp_path: 'apps/dash/prod' },
+          },
+        },
+      ],
+      library: { user_symbol: 'Core', script_id: LIB_ID, prod_version: 12 },
+      environments: { dev: { resources: {} }, prod: { resources: {} } },
+    });
+  }
+
+  function consumerManifest(scopes: string[] | null): string {
+    const m: Record<string, unknown> = {
+      runtimeVersion: 'V8',
+      dependencies: {
+        libraries: [{ userSymbol: 'Core', libraryId: LIB_ID, version: '12', developmentMode: false }],
+      },
+    };
+    if (scopes) m.oauthScopes = scopes;
+    return JSON.stringify(m);
+  }
+
+  async function makeParc(consumerScopes: string[] | null): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-g1-'));
+    await writeFile(join(root, 'gaslens.workspace.json'), masterWithProvider(), 'utf8');
+    // core/prod : la lib utilise GmailApp, sans oauthScopes explicite (auto-détection).
+    const coreDir = join(root, 'apps', 'core', 'prod');
+    await mkdir(coreDir, { recursive: true });
+    await writeFile(join(coreDir, 'appsscript.json'), JSON.stringify({ runtimeVersion: 'V8' }), 'utf8');
+    await writeFile(join(coreDir, 'Code.gs'), `function notify(to) { GmailApp.sendEmail(to, 'hi', 'body'); }`, 'utf8');
+    // dash/prod : consomme Core, scopes explicites (selon le cas).
+    const dashDir = join(root, 'apps', 'dash', 'prod');
+    await mkdir(dashDir, { recursive: true });
+    await writeFile(join(dashDir, 'appsscript.json'), consumerManifest(consumerScopes), 'utf8');
+    await writeFile(join(dashDir, 'Code.gs'), `function go() { return Core.notify('a@b.c'); }`, 'utf8');
+    return root;
+  }
+
+  it('WARN quand le consommateur (scopes explicites) manque le scope Gmail requis par la lib', async () => {
+    const root = await makeParc(['https://www.googleapis.com/auth/spreadsheets']);
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      const f = r.findings.find((x) => x.consumer_kind === 'env.library_scope_missing');
+      expect(f).toBeDefined();
+      expect(f?.severity).toBe('warn');
+      expect(f?.reason).toContain('mail.google.com');
+      expect(f?.symbol).toContain('dash');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('CLEAN quand le consommateur déclare le scope Gmail', async () => {
+    const root = await makeParc(['https://mail.google.com/']);
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      expect(r.findings.some((x) => x.consumer_kind === 'env.library_scope_missing')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('silencieux si le consommateur est en auto-détection (pas d\'oauthScopes explicite)', async () => {
+    const root = await makeParc(null);
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      expect(r.findings.some((x) => x.consumer_kind === 'env.library_scope_missing')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('extractIdFromUrl (F5a)', () => {
   const ID = 'A'.repeat(30);
   it('extrait l\'id d\'une URL éditeur (/d/<ID>)', () => {

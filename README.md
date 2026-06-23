@@ -258,6 +258,7 @@ gaslens env validate                 # valide les deux axes d'environnement
 - **`env.library_version_mismatch`** (BREAK) : un `prod` qui consomme la bibliothèque en HEAD/dev au lieu de la version figée.
 - **`env.hardcoded_resource`** (WARN) : un id de ressource codé en dur (du bon env, OU **non déclaré** au manifeste — détecté via `openById`/`getFileById`/… **et `openByUrl('…/d/<ID>/…')`**, l'id extrait de l'URL).
 - **`env.undeclared_resource`** (WARN) : une ressource déclarée dans un env mais absente d'un autre (parc sous-provisionné).
+- **`env.library_scope_missing`** (WARN, cross-projet) : un consommateur qui déclare un `oauthScopes` **explicite** (donc désactive l'auto-détection Google) mais à qui il manque un scope OAuth requis par la **bibliothèque** qu'il consomme → la lib échoue à l'autorisation chez ce consommateur. L'angle mort §3.4 invisible à la lecture d'un seul projet.
 
 Pour s'orienter dans un parc multi-app, `gaslens workspace overview` synthétise en un appel : apps × dev/prod, version de lib consommée, verdict `env validate` par projet, et couverture doc.
 

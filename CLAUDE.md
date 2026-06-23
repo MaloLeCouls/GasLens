@@ -84,7 +84,7 @@ src/
   gas-services.ts              liste de NOMS de services natifs (utilisée par le scanner pour classifier les receivers ; validation par méthode = gas-api.ts)
   ── V4 / V5 / multi-repo (LOTs A→E) ──
   workspace-manifest.ts        manifeste maître gaslens.workspace.json (schéma zod + loader + helpers) — source de vérité du parc (V4 §26-29)
-  env-validate.ts              `env validate` — 2 axes d'env : env.cross_env_leak / library_version_mismatch / hardcoded_resource / undeclared_resource (V4 §29) ; ids en dur via openById/… ET openByUrl (extractIdFromUrl, F5a)
+  env-validate.ts              `env validate` — 2 axes d'env : env.cross_env_leak / library_version_mismatch / hardcoded_resource / undeclared_resource (V4 §29) / **library_scope_missing** (G1, scopes OAuth requis par la lib absents d'un consommateur à oauthScopes explicite) ; ids en dur via openById/… ET openByUrl (F5a)
   doc-lint.ts                  `doc lint` / `doc stub` — doc.undocumented / doc.param_drift / doc.return_drift / doc.stale_ref (V4 §25, F4) ; réutilise extract/jsdoc.ts (FunctionDoc.returns_desc + refs) + return_analysis.produced_object_fields
   doctor.ts                    `doctor` — prérequis (Node≥22, clasp, ADC, clasp-config↔manifeste, baselines par app, plugin, bibliothèque mère déclarée) ; SessionStart (V5 §34, E3, F-corr B)
   workspace-init.ts            `workspace init` — scaffolder (manifeste, .claude/settings.json, .mcp.json, apps/backlog/docs) (V5 §33)

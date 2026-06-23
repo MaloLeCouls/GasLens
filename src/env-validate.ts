@@ -34,6 +34,10 @@ import {
 } from './workspace-manifest.js';
 import type { ProjectManifest } from './types.js';
 import {
+  SERVICE_SCOPE_REQUIREMENTS,
+  isScopeSatisfied,
+} from './scopes.js';
+import {
   aggregateVerdict,
   type Finding,
   type Verdict,
@@ -115,6 +119,8 @@ export async function runEnvValidate(
   const skipped: EnvValidateReport['coverage']['skipped'] = [];
 
   const ownerIndex = resourceOwnerIndex(master);
+  // G1 : scopes requis par la bibliothèque mère (une fois pour tout le parc).
+  const libScopeReq = await computeLibraryScopeRequirement(master, wsRoot);
 
   for (const t of targets) {
     if (!existsSync(t.dir)) {
@@ -124,6 +130,7 @@ export async function runEnvValidate(
     const { manifest } = await readManifest(t.dir);
     findings.push(...checkLibraryVersion(manifest, master.library, t));
     findings.push(...(await checkResourceLeaks(t, ownerIndex)));
+    findings.push(...checkLibraryScopes(manifest, t, libScopeReq, master));
     checked.push(t);
   }
 
@@ -280,6 +287,133 @@ export function checkLibraryVersion(
     }
   }
   return [];
+}
+
+/**
+ * AXE CODE (cross-projet) — `env.library_scope_missing` (G1). Le piège §3.4 :
+ * dès qu'une webapp déclare un `oauthScopes` **explicite**, l'auto-détection
+ * Google est désactivée — y compris pour les scopes requis par la BIBLIOTHÈQUE
+ * qu'elle consomme. Si la lib utilise Gmail mais que le consommateur (à scopes
+ * explicites) ne déclare pas le scope Gmail, **la lib casse chez ce
+ * consommateur** — invisible à la lecture d'un seul projet.
+ */
+export interface LibraryScopeRequirement {
+  provider_app: string;
+  /** Scopes déclarés explicitement par la lib (autoritaires). */
+  explicit_scopes: Set<string>;
+  /** Services GAS détectés dans le code de la lib (→ scope via le mapping). */
+  used_services: Set<string>;
+}
+
+export async function computeLibraryScopeRequirement(
+  master: WorkspaceManifest,
+  wsRoot: string,
+): Promise<LibraryScopeRequirement | null> {
+  if (!master.library) return null;
+  const lib = master.library;
+  const providerApp =
+    master.apps.find((a) => a.library_prefix && a.library_prefix === lib.user_symbol) ??
+    master.apps.find((a) =>
+      Object.values(a.projects).some((p) => (p as ProjectRef | undefined)?.script_id === lib.script_id),
+    );
+  if (!providerApp) return null;
+
+  // Choisir un dossier provider existant (prod prioritaire, puis dev, puis premier).
+  const candidates: ProjectRef[] = [
+    providerApp.projects.prod,
+    providerApp.projects.dev,
+    ...Object.values(providerApp.projects),
+  ].filter((p): p is ProjectRef => Boolean(p?.clasp_path));
+  let dir: string | null = null;
+  for (const c of candidates) {
+    const d = resolve(join(wsRoot, c.clasp_path!));
+    if (existsSync(d)) {
+      dir = d;
+      break;
+    }
+  }
+  if (!dir) return null;
+
+  const { manifest } = await readManifest(dir);
+  const used_services = await detectServicesInSources(dir);
+  return {
+    provider_app: providerApp.name,
+    explicit_scopes: new Set(manifest.oauth_scopes),
+    used_services,
+  };
+}
+
+/** Scan léger des sources de la lib pour les services GAS scopés (word-boundary). */
+async function detectServicesInSources(dir: string): Promise<Set<string>> {
+  const services = new Set<string>();
+  const known = Object.keys(SERVICE_SCOPE_REQUIREMENTS);
+  const files = await listSourceFiles(dir);
+  for (const file of files) {
+    if (!file.endsWith('.gs') && !file.endsWith('.js')) continue;
+    let text: string;
+    try {
+      text = await readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const svc of known) {
+      if (services.has(svc)) continue;
+      if (new RegExp(`\\b${svc}\\b`).test(text)) services.add(svc);
+    }
+  }
+  return services;
+}
+
+export function checkLibraryScopes(
+  consumerManifest: ProjectManifest,
+  target: ValidatedTarget,
+  req: LibraryScopeRequirement | null,
+  master: WorkspaceManifest,
+): Finding[] {
+  if (!req || !master.library) return [];
+  // Ne pas vérifier la lib contre elle-même.
+  if (target.app === req.provider_app) return [];
+  // Le consommateur consomme-t-il bien la bibliothèque mère ?
+  const lib = master.library;
+  const consumes = consumerManifest.libraries.some(
+    (l) =>
+      (lib.user_symbol && l.user_symbol === lib.user_symbol) ||
+      (l.library_id !== '' && l.library_id === lib.script_id),
+  );
+  if (!consumes) return [];
+  // L'auto-détection Google n'est désactivée QUE si oauthScopes est explicite.
+  if (consumerManifest.oauth_scopes.length === 0) return [];
+
+  const declared = new Set(consumerManifest.oauth_scopes);
+  const missing = new Set<string>();
+  // (a) scopes que la lib déclare explicitement et que le consommateur n'a pas.
+  for (const s of req.explicit_scopes) {
+    if (!declared.has(s)) missing.add(s);
+  }
+  // (b) services utilisés par la lib dont aucun scope acceptable n'est déclaré.
+  for (const svc of req.used_services) {
+    if (!isScopeSatisfied(svc, declared)) {
+      missing.add(SERVICE_SCOPE_REQUIREMENTS[svc]!.primary);
+    }
+  }
+  if (missing.size === 0) return [];
+
+  return [
+    {
+      severity: 'warn',
+      symbol: `${target.app}::env::${target.env}`,
+      consumer: { file: 'appsscript.json', line: 1 },
+      consumer_kind: 'env.library_scope_missing',
+      reason:
+        `le projet '${target.app}' [${target.env}] consomme la bibliothèque '${req.provider_app}' ET déclare un ` +
+        `oauthScopes explicite (auto-détection désactivée), mais il manque le(s) scope(s) requis par la lib : ` +
+        `${[...missing].join(', ')} — la bibliothèque échouera à l'autorisation chez ce consommateur`,
+      fix_hint:
+        `ajouter ${[...missing].map((s) => `'${s}'`).join(', ')} à oauthScopes dans ${target.dir}/appsscript.json, ` +
+        `ou retirer oauthScopes pour réactiver l'auto-détection Google (qui installe les scopes de la lib)`,
+      confidence: 'medium',
+    },
+  ];
 }
 
 /** AXE RESSOURCES — ids de ressources en dur (fuite inter-env ou hardcode). */
