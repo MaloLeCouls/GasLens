@@ -21,6 +21,15 @@ ressources prod). `gaslens env validate` garantit leur alignement.
 bibliothèque mère consommée, verdict `env validate` par app/env, couverture doc.
 À lancer en début de session pour situer l'état du parc avant d'agir.
 
+## Faire grandir l'outil (auto-évolution)
+
+Si tu **refais à la main** une analyse que GasLens pourrait câbler, butes sur un
+**garde-fou absent**, ou aimerais une commande/un check qui manque : logue-le
+plutôt que de le subir en silence —
+`gaslens request add "<besoin>" --kind check|command|perf|guardrail|doc`.
+Les besoins récurrents (dédupliqués par fréquence) priorisent les évolutions de
+l'outil. `gaslens request list` pour les revoir.
+
 ## Mémoire vivante
 
 <!-- Décisions durables, pièges, conventions locales du parc. -->

@@ -109,6 +109,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens workspace init <nom>` | Scaffold un workspace complet (manifeste maître, `.claude/settings.json`, `.mcp.json`, `apps/backlog/docs`) |
 | `gaslens workspace add-app <nom>` | Onboarde une app : entrée `apps[]` (2 projets dev/prod) + `apps/<nom>/{dev,prod}` + `CLAUDE.md` d'app + rappel `clasp clone` |
 | `gaslens workspace overview [root]` | **Vue parc d'un coup** : apps × dev/prod, version de la bibliothèque consommée, verdict `env validate` par app/env, couverture doc — orientation en un appel |
+| `gaslens request add <need>` | **Canal d'auto-évolution** : l'agent logue un manque récurrent de l'outil (dédup par fréquence). `gaslens request list` pour les revoir et prioriser |
 | `gaslens manifest` | Croise code ↔ `appsscript.json` : libs/scopes/services avancés/`urlFetchWhitelist` |
 | `gaslens validate-api` | Méthodes GAS hallucinées + arity manquante + méthodes dépréciées |
 | `gaslens lint-runtime` | Anti-patterns quota/lock/trigger (warn/info) |
@@ -271,7 +272,7 @@ Fidèle à la doctrine « ne jamais bluffer une certitude » :
 
 ## Distribution : moteur npm + plugin Claude Code
 
-GAS-Lens part d'**un seul repo, deux faces** (V5) : le moteur (`src/`, `bin/` → npm `@malolecouls/gaslens`) et le **plugin Claude Code** (`.claude-plugin/`, `skills/`, `commands/`, `hooks/`, `.mcp.json`, `templates/`). Installer le plugin (`/plugin install gaslens@gaslens`) câble d'un coup les 7 skills, les slash commands, le hook PostToolUse, le `doctor` au SessionStart et le MCP Chrome DevTools (les « yeux » qui pilotent le `/exec` réel).
+GAS-Lens part d'**un seul repo, deux faces** (V5) : le moteur (`src/`, `bin/` → npm `@malolecouls/gaslens`) et le **plugin Claude Code** (`.claude-plugin/`, `skills/`, `commands/`, `hooks/`, `.mcp.json`, `templates/`). Installer le plugin (`/plugin install gaslens@gaslens`) câble d'un coup les 8 skills, les slash commands, le hook PostToolUse, le `doctor` au SessionStart et le MCP Chrome DevTools (les « yeux » qui pilotent le `/exec` réel).
 
 ### Librairies externes (V3 §22.1)
 

@@ -45,6 +45,11 @@ import {
 } from './workspace-init.js';
 import { runAddApp } from './workspace-add-app.js';
 import { buildParcOverview, renderParcOverviewText } from './parc-overview.js';
+import {
+  addEvolutionRequest,
+  listEvolutionRequests,
+  renderRequestsText,
+} from './evolution-requests.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -1524,6 +1529,56 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       process.exit(2);
     });
 
+  const request = program
+    .command('request')
+    .description(
+      "Canal d'auto-évolution de GasLens (LOT G0) : l'agent logue les manques " +
+        "récurrents qu'il rencontre (analyse refaite à la main, garde-fou absent, " +
+        "commande souhaitée). Dédupliqué par fréquence → priorisation par l'usage.",
+    );
+
+  request
+    .command('add')
+    .description(
+      "Enregistre un besoin d'évolution. Si le même besoin est déjà loggé, " +
+        "incrémente son compteur d'occurrences (signal de priorité).",
+    )
+    .argument('<need>', "Le besoin, en une phrase (ex: 'détecter les clés Properties orphelines cross-projet')")
+    .option('--kind <kind>', 'check | command | perf | guardrail | doc | other', 'other')
+    .option('--context <text>', "Ce que tu faisais quand le manque est apparu")
+    .option('--suggest <text>', "consumer_kind ou commande envisagée")
+    .option('--root <path>', "Racine (on remonte au workspace)", '.')
+    .action(async (need: string, opts: RequestAddCliOpts) => {
+      const res = await addEvolutionRequest(
+        resolve(opts.root),
+        { need, kind: opts.kind, context: opts.context, suggest: opts.suggest },
+        new Date().toISOString(),
+      );
+      process.stdout.write(
+        (res.created
+          ? `gaslens request: nouveau besoin enregistré (×1)`
+          : `gaslens request: besoin déjà connu, occurrences=${res.entry.occurrences}`) +
+          ` — '${res.entry.need}' [${res.entry.kind}]. ${res.total} besoin(s) au total.\n`,
+      );
+      process.exit(0);
+    });
+
+  request
+    .command('list')
+    .description("Liste les besoins d'évolution enregistrés, triés par fréquence.")
+    .option('--root <path>', "Racine (on remonte au workspace)", '.')
+    .option('--format <fmt>', 'json | text', 'text')
+    .option('--compact', 'JSON sans indentation', false)
+    .action(async (opts: RequestListCliOpts) => {
+      const entries = await listEvolutionRequests(resolve(opts.root));
+      if (opts.format === 'json') {
+        process.stdout.write(jsonOut(entries, opts.compact) + '\n');
+      } else {
+        process.stdout.write(renderRequestsText(entries) + '\n');
+      }
+      process.exit(0);
+    });
+
   const workspace = program
     .command('workspace')
     .description("Gestion du workspace multi-projets (V5 §33).");
@@ -1777,6 +1832,19 @@ interface ParcOverviewCliOpts {
   compact: boolean;
 }
 
+interface RequestAddCliOpts {
+  kind: string;
+  context?: string;
+  suggest?: string;
+  root: string;
+}
+
+interface RequestListCliOpts {
+  root: string;
+  format: string;
+  compact: boolean;
+}
+
 interface CommandOverviewEntry {
   name: string;
   tldr: string;
@@ -1802,6 +1870,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'workspace init <nom>', tldr: 'scaffold workspace (manifeste, .claude/settings, .mcp.json, apps/backlog/docs)', reads_index: false, emits_findings: false },
   { name: 'workspace add-app <nom>', tldr: 'onboarde une app (entrée manifeste + apps/<nom>/{dev,prod} + rappel clasp clone)', reads_index: false, emits_findings: false },
   { name: 'workspace overview [root]', tldr: 'vue parc d\'un coup : apps × dev/prod, version lib, verdict env validate, couverture doc', reads_index: false, emits_findings: false },
+  { name: 'request add <need>', tldr: 'logue un manque récurrent de GasLens (auto-évolution, dédup par fréquence) ; request list pour les voir', reads_index: false, emits_findings: false },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },

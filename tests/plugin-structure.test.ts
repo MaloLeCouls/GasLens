@@ -16,6 +16,7 @@ const SKILLS = [
   'refresh-dev-data',
   'snapshot-sources',
   'promote-deploy',
+  'request-evolution',
 ];
 const COMMANDS = [
   'gaslens-init-workspace',
