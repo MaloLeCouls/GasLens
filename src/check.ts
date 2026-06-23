@@ -1,10 +1,12 @@
+import { resolve, join } from 'node:path';
 import { scanProject } from './scanner.js';
 import { diffIndexes, type DiffOptions } from './diff.js';
 import { analyzeManifest } from './manifest-analysis.js';
 import { validateApi } from './validate-api.js';
 import { lintRuntime } from './lint-runtime.js';
 import { lintWebapp } from './lint-webapp.js';
-import { runEnvValidate } from './env-validate.js';
+import { runEnvValidate, findWorkspaceRoot } from './env-validate.js';
+import { loadWorkspaceManifest, type ProjectRef } from './workspace-manifest.js';
 import { lintDoc } from './doc-lint.js';
 import {
   aggregateVerdict,
@@ -128,8 +130,32 @@ export function enrichWithLintWebappFindings(
   report: DiffReport,
   current: ProjectIndex,
   threshold: 'info' | 'warn' | 'break',
+  embeddedInSite = false,
 ): DiffReport {
-  return mergeFindings(report, lintWebapp(current).findings, threshold);
+  return mergeFindings(report, lintWebapp(current, { embeddedInSite }).findings, threshold);
+}
+
+/**
+ * Le projet enraciné en `root` est-il déclaré **embarqué dans un Google Site**
+ * (`site_embeds` non vide pour son app dans le manifeste maître) ? Quand oui, on
+ * SAIT que l'absence d'`ALLOWALL` casse l'embed → `webapp.xframe_missing` passe
+ * de info à warn (G2 ↔ G4). No-op rapide hors workspace.
+ */
+export async function resolveEmbeddedInSite(root: string): Promise<boolean> {
+  const wsRoot = findWorkspaceRoot(root);
+  if (!wsRoot) return false;
+  const loaded = await loadWorkspaceManifest(wsRoot);
+  if (!loaded.manifest) return false;
+  const target = resolve(root);
+  for (const app of loaded.manifest.apps) {
+    if (!app.site_embeds || app.site_embeds.length === 0) continue;
+    for (const ref of Object.values(app.projects)) {
+      const p = ref as ProjectRef | undefined;
+      if (!p?.clasp_path) continue;
+      if (resolve(join(wsRoot, p.clasp_path)) === target) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -162,7 +188,8 @@ export async function applyEnrichments(
   let r = enrichWithManifestFindings(report, current, threshold);
   r = enrichWithApiFindings(r, current, threshold);
   r = enrichWithLintRuntimeFindings(r, current, threshold);
-  r = enrichWithLintWebappFindings(r, current, threshold);
+  const embeddedInSite = await resolveEmbeddedInSite(root);
+  r = enrichWithLintWebappFindings(r, current, threshold, embeddedInSite);
   r = enrichWithDocFindings(r, current, threshold);
   r = await enrichWithEnvFindings(r, root, threshold);
   return r;

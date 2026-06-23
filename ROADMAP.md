@@ -230,7 +230,8 @@ suppression de la branche `feat/lot-a-v4-analyses`.
   Scopes lib = explicites + services détectés dans sa source (`scopes.ts`). `env-validate.ts`.
 - [x] **G2 — `webapp.xframe_missing`** : doGet/doPost renvoyant du HTML sans
   `setXFrameOptionsMode(ALLOWALL)` → iframe Site refusée. Signal intrinsèque `FunctionRecord.webapp_html`
-  (`extract/webapp-html.ts`). **INFO** par défaut, **WARN** si le registre déclare un embed Site (G4).
+  (`extract/webapp-html.ts`). **INFO** par défaut, **élevé AUTOMATIQUEMENT à WARN** dans `check` quand
+  l'app déclare `site_embeds` (`resolveEmbeddedInSite` dans `applyEnrichments`) — cf. G4.
 - [x] **G3 — `gaslens guard` (garde-fou PreToolUse)** : bloque (exit 2 + deny) un `clasp push/deploy`
   vers un projet **prod** dont `env validate` est BREAK. `src/guard.ts` + PreToolUse(Bash)→guard.
 - [x] **G4 — registre enrichi (plan de masse)** : manifeste étendu (`gcp_project_id`, `exec_url`,
@@ -244,9 +245,12 @@ suppression de la branche `feat/lot-a-v4-analyses`.
 - [x] **G7 — notes de doctrine Sites/webapp** : /dev≠/exec, embed ALLOWALL, iframe non-redimensionnée
   (postMessage), `google.script.history` en embed → `templates/claude-md/app.md`.
 
-**Restent (suites possibles)** : élever `webapp.xframe_missing` info→warn automatiquement dans
-`check` quand `site_embeds` est déclaré (l'option `lintWebapp({embeddedInSite})` existe + est testée ;
-wiring async dans le pipeline check à faire) ; tests de contrat distants réels en CI (gabarit fourni).
+- [x] **G2↔G4 — élévation auto** : `webapp.xframe_missing` passe info→warn **automatiquement** dans
+  `check`/hook quand l'app du projet déclare `site_embeds` (`resolveEmbeddedInSite` dans
+  `applyEnrichments`). Backward-compat eval/mcp (param `embeddedInSite` optionnel, défaut false).
+
+**Restent (suites possibles)** : tests de contrat distants réels en CI (le gabarit
+`.github/workflows/gas-ci.yml` est fourni, à compléter avec les secrets clasp).
 
 ---
 
