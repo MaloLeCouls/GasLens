@@ -368,10 +368,30 @@ function describeOwners(owners: Array<{ env: string; logical: string }>): string
 const RESOURCE_OPEN_RE =
   /\b(openById|getFileById|getFolderById|getFormById|getDocumentById|getSpreadsheetById)\s*\(\s*['"]([^'"]+)['"]/g;
 
+/**
+ * APIs qui ouvrent une ressource par **URL** littérale (`openByUrl`). L'id est
+ * embarqué dans l'URL — on l'extrait via `extractIdFromUrl` (F5a). Lève la
+ * limite « la détection ne voit que les ids passés en bare string ».
+ */
+const RESOURCE_OPEN_URL_RE = /\b(openByUrl)\s*\(\s*['"]([^'"]+)['"]/g;
+
 interface ResourceOpenHit {
   value: string;
   line: number;
   api: string;
+}
+
+/**
+ * Extrait l'id de ressource d'une URL Google (`/d/<ID>` pour les éditeurs
+ * Docs/Sheets/Slides/Forms et `/file/d/<ID>` Drive ; `/folders/<ID>` pour un
+ * dossier Drive). Renvoie null si l'URL ne porte pas d'id reconnaissable.
+ */
+export function extractIdFromUrl(url: string): string | null {
+  const byD = /\/d\/([A-Za-z0-9_-]{20,})/.exec(url);
+  if (byD?.[1]) return byD[1];
+  const byFolder = /\/folders\/([A-Za-z0-9_-]{20,})/.exec(url);
+  if (byFolder?.[1]) return byFolder[1];
+  return null;
 }
 
 function findResourceOpenLiterals(text: string): ResourceOpenHit[] {
@@ -383,6 +403,15 @@ function findResourceOpenLiterals(text: string): ResourceOpenHit[] {
     const value = m[2] ?? '';
     const line = text.slice(0, m.index).split('\n').length;
     out.push({ value, line, api });
+  }
+  // openByUrl('…/d/<ID>/…') → on extrait l'id de l'URL.
+  RESOURCE_OPEN_URL_RE.lastIndex = 0;
+  while ((m = RESOURCE_OPEN_URL_RE.exec(text)) !== null) {
+    const url = m[2] ?? '';
+    const id = extractIdFromUrl(url);
+    if (!id) continue;
+    const line = text.slice(0, m.index).split('\n').length;
+    out.push({ value: id, line, api: 'openByUrl' });
   }
   return out;
 }

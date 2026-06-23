@@ -1,0 +1,57 @@
+# CI GAS-Lens (LOT F1) — build + test + eval sur matrice Windows + Linux.
+#
+# Pourquoi une matrice OS : les deux seuls bugs régressifs rencontrés sur ce
+# repo étaient OS-spécifiques (CRLF au checkout Windows via core.autocrlf ; le
+# fast-path incrémental piloté par mtime, non fiable sur NTFS). Une CI mono-OS
+# les aurait laissés passer. C'est un prérequis avant tout `npm publish`.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Annule les runs précédents d'une même PR/branche si un nouveau push arrive.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-eval:
+    name: build · test · eval (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` requiert un package-lock.json. S'il n'est pas commité, on
+      # retombe sur `npm install` (les natives tree-sitter sont alors recompilées).
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm test
+
+      - name: Eval (dataset de référence — doit rester à 100 %)
+        run: node bin/gaslens.js eval

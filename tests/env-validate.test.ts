@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runEnvValidate, checkUndeclaredResources } from '../src/env-validate.js';
+import {
+  runEnvValidate,
+  checkUndeclaredResources,
+  extractIdFromUrl,
+} from '../src/env-validate.js';
 import { parseWorkspaceManifest } from '../src/workspace-manifest.js';
 
 const LIB_ID = 'LIB_SCRIPT_ID_0000000000000000000000000';
@@ -124,6 +128,43 @@ describe('env validate — axe RESSOURCES', () => {
     }
   });
 
+  it('BREAK env.cross_env_leak quand prod ouvre une URL embarquant un id DEV (openByUrl, F5a)', async () => {
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_DEV}/edit`;
+    const root = await makeWorkspace(CLEAN_DEV, {
+      lib: CLEAN_PROD.lib,
+      code: `function open_() { return SpreadsheetApp.openByUrl('${url}'); }`,
+    });
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      expect(r.verdict).toBe('BREAK');
+      const leak = r.findings.filter((f) => f.consumer_kind === 'env.cross_env_leak');
+      // Exactement une fuite : pas de double-comptage (substring vs openByUrl).
+      expect(leak).toHaveLength(1);
+      expect(leak[0]?.reason).toContain(SHEET_DEV);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('WARN env.hardcoded_resource pour un id NON déclaré dans une URL openByUrl (F5a)', async () => {
+    const UNDECLARED = 'UNDECLARED_URL_ID_CDEFGHIJKLMNOPQRSTUV';
+    const url = `https://docs.google.com/document/d/${UNDECLARED}/edit`;
+    const root = await makeWorkspace(CLEAN_DEV, {
+      lib: CLEAN_PROD.lib,
+      code: `function open_() { return DocumentApp.openByUrl('${url}'); }`,
+    });
+    try {
+      const r = await runEnvValidate({ root, env: 'prod' });
+      const hc = r.findings.find(
+        (f) => f.consumer_kind === 'env.hardcoded_resource' && f.reason.includes(UNDECLARED),
+      );
+      expect(hc).toBeDefined();
+      expect(hc?.reason).toContain('openByUrl');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('ne flague pas un littéral court / non id-shaped passé à openById', async () => {
     const root = await makeWorkspace(CLEAN_DEV, {
       lib: CLEAN_PROD.lib,
@@ -183,6 +224,21 @@ describe('env validate — axe CODE', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('extractIdFromUrl (F5a)', () => {
+  const ID = 'A'.repeat(30);
+  it('extrait l\'id d\'une URL éditeur (/d/<ID>)', () => {
+    expect(extractIdFromUrl(`https://docs.google.com/spreadsheets/d/${ID}/edit`)).toBe(ID);
+    expect(extractIdFromUrl(`https://drive.google.com/file/d/${ID}/view`)).toBe(ID);
+  });
+  it('extrait l\'id d\'une URL de dossier Drive (/folders/<ID>)', () => {
+    expect(extractIdFromUrl(`https://drive.google.com/drive/folders/${ID}`)).toBe(ID);
+  });
+  it('renvoie null quand l\'URL ne porte pas d\'id reconnaissable', () => {
+    expect(extractIdFromUrl('https://example.com/page')).toBeNull();
+    expect(extractIdFromUrl('https://docs.google.com/spreadsheets/d/short/edit')).toBeNull();
   });
 });
 

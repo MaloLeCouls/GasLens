@@ -689,6 +689,44 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
     }
   }
 
+  // Re-résolution des appels sortants des fichiers CACHÉS (correctif F2).
+  // Un fichier inchangé peut appeler une fonction qui a été supprimée/renommée
+  // dans un fichier MODIFIÉ : son outbound_call (résolu dans le baseline) dangle
+  // désormais. Le full scan le classe en `unresolved_bare` ; sans ce passage,
+  // l'incrémental le laisserait « résolu » → le hook dirait CLEAN à tort sur un
+  // renommage cassant. On reclasse exactement comme l'extraction fraîche.
+  if (useTrueIncremental) {
+    for (const caller of records.values()) {
+      if (!unchangedGsFiles.has(caller.definition.file)) continue;
+      const stillValid: import('./types.js').OutboundCall[] = [];
+      for (const out of caller.outbound_calls) {
+        if (records.has(out.callee_name)) {
+          stillValid.push(out);
+          continue;
+        }
+        // Cible disparue → reclassement en appel non résolu (miroir du full scan).
+        const u: UnresolvedCall = {
+          file: out.file,
+          line: out.line,
+          callee_text: out.callee_name,
+          reason: 'identifier non résolu dans le namespace projet',
+        };
+        unresolved.push(u);
+        (unresolved_calls_by_file[out.file] ??= []).push(u);
+        caller.coverage.unresolved.push({
+          what: `appel à '${out.callee_name}' non résolu`,
+          where: `${out.file}:${out.line}`,
+          reason: "le nom n'est défini ni dans le projet ni comme service GAS connu",
+          suggestion: 'vérifier l\'orthographe ou un import manquant',
+        });
+        caller.coverage.confidence = 'medium';
+        // calls_out stocke le nom nu pour un appel interne (cf. case 'internal').
+        caller.calls_out = caller.calls_out.filter((c) => c !== out.callee_name);
+      }
+      caller.outbound_calls = stillValid;
+    }
+  }
+
   // Normalisation finale : reconstruit called_by depuis outbound_calls.
   // - Full scan : redondant mais idempotent (résultat identique).
   // - Incrémental : nécessaire pour purger les called_by stales des records
@@ -1810,6 +1848,8 @@ function emptyReturnAnalysis(): ReturnAnalysis {
     serializable: 'unknown',
     non_serializable_reasons: [],
     has_open_object: false,
+    produced_object_fields: [],
+    returns_only_object_literals: false,
   };
 }
 

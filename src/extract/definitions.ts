@@ -85,6 +85,8 @@ function docFrom(jsdoc: ParsedJsdoc): FunctionDoc {
     present: jsdoc.present,
     summary: jsdoc.summary,
     param_tags: jsdoc.paramTagNames,
+    returns_desc: jsdoc.returns?.desc ?? null,
+    refs: jsdoc.refs,
   };
 }
 

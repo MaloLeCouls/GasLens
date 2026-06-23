@@ -32,6 +32,14 @@ export interface FunctionDoc {
   summary: string | null;
   /** Noms déclarés dans les tags `@param` (réels ou non). */
   param_tags: string[];
+  /** Description du tag `@returns`/`@return` (prose), ou null — base de `doc.return_drift`. */
+  returns_desc?: string | null;
+  /**
+   * Symboles explicitement référencés dans la doc via `{@link X}` /
+   * `{@linkcode X}` / `@see X` — base de `doc.stale_ref` (référence vers un
+   * symbole disparu).
+   */
+  refs?: string[];
 }
 
 export type Visibility = 'public' | 'private';
@@ -78,6 +86,19 @@ export interface ReturnAnalysis {
    * la shape ne peut pas être fermée statiquement.
    */
   has_open_object: boolean;
+  /**
+   * Champs (clés littérales) des objets renvoyés, union triée/dédupliquée à
+   * travers tous les `return { ... }`. Base de `doc.return_drift`. Vide si la
+   * fonction ne renvoie aucun objet littéral.
+   */
+  produced_object_fields?: string[];
+  /**
+   * Vrai ssi il y a ≥1 return ET tous les chemins de retour sont des objets
+   * littéraux (ou null/undefined) — auquel cas `produced_object_fields` est la
+   * shape **autoritaire** (sûr de flaguer une dérive). Faux si un retour est
+   * opaque (appel, identifiant, etc.) — on s'abstient alors.
+   */
+  returns_only_object_literals?: boolean;
 }
 
 export type ExposureType =

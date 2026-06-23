@@ -9,6 +9,11 @@ export interface ParsedJsdoc {
   /** Noms déclarés dans les tags `@param`, dans l'ordre de déclaration. */
   paramTagNames: string[];
   returns: ReturnDoc | null;
+  /**
+   * Symboles référencés via `{@link X}` / `{@linkcode X}` / `{@linkplain X}` /
+   * `@see X` (X = identifiant nu). Base de `doc.stale_ref`.
+   */
+  refs: string[];
 }
 
 /**
@@ -22,6 +27,7 @@ export function parseJsdoc(commentText: string | null): ParsedJsdoc {
     params: new Map(),
     paramTagNames: [],
     returns: null,
+    refs: [],
   };
   if (!commentText) return empty;
   if (!commentText.startsWith('/**')) return empty;
@@ -50,7 +56,49 @@ export function parseJsdoc(commentText: string | null): ParsedJsdoc {
     }
   }
 
-  return { present: true, summary: extractSummary(body), params, paramTagNames, returns };
+  return {
+    present: true,
+    summary: extractSummary(body),
+    params,
+    paramTagNames,
+    returns,
+    refs: extractRefs(body),
+  };
+}
+
+/**
+ * Extrait les symboles explicitement référencés dans la doc. Deux sources, les
+ * seules sans ambiguïté (faux positifs quasi nuls) :
+ *   - les tags inline `{@link X}` / `{@linkcode X}` / `{@linkplain X}` ;
+ *   - le tag `@see X` quand X est un identifiant nu (pas une URL ni de la prose).
+ * On retient l'identifiant de tête (on dépouille `#membre`, `()` et le texte
+ * d'affichage `X|libellé`). Dédupliqué, ordre d'apparition conservé.
+ */
+function extractRefs(body: string): string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string | undefined): void => {
+    if (!raw) return;
+    const head = raw.trim().split(/[|\s]/)[0] ?? '';
+    const sym = head.replace(/[#(].*$/, '');
+    if (!/^[A-Za-z_$][\w$]*$/.test(sym)) return;
+    if (seen.has(sym)) return;
+    seen.add(sym);
+    refs.push(sym);
+  };
+  const link = /\{@link(?:code|plain)?\s+([^}]+)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = link.exec(body)) !== null) add(m[1]);
+  const see = /@see\s+([^\n}]+)/g;
+  while ((m = see.exec(body)) !== null) {
+    const v = (m[1] ?? '').trim();
+    // `@see` peut contenir une URL ou de la prose : on ne retient qu'un
+    // identifiant nu (éventuellement préfixé d'un `{@link}` déjà capturé).
+    if (/^https?:/i.test(v) || /\s/.test(v.replace(/[#(].*$/, '').trim())) continue;
+    if (v.startsWith('{@link')) continue; // déjà couvert par la passe link
+    add(v);
+  }
+  return refs;
 }
 
 /** L'intention = les lignes avant le premier `@tag` (description libre). */

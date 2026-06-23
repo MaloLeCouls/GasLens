@@ -102,12 +102,13 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens impact <fn> --change <dsl>` | Régressions potentielles d'une mutation décrite |
 | `gaslens diff --from <idx> --to <idx>` | Compare deux index, change set sémantique dérivé |
 | `gaslens check --baseline <idx>` | Diff + manifest + validate-api + lint-runtime + lint-webapp + **doc** + **env** |
-| `gaslens env validate [root]` | Deux axes d'environnement (V4) : `library_version_mismatch` (lib dev=HEAD/prod=figée) + `cross_env_leak` / `hardcoded_resource` / `undeclared_resource` (manifeste maître) |
-| `gaslens doc lint` | Fonctions sans intention (`doc.undocumented`) + `@param` en dérive (`doc.param_drift`). N'écrit jamais la prose |
+| `gaslens env validate [root]` | Deux axes d'environnement (V4) : `library_version_mismatch` (lib dev=HEAD/prod=figée) + `cross_env_leak` / `hardcoded_resource` / `undeclared_resource` (manifeste maître). Détecte les ids en dur via `openById`/`getFileById`/… **et `openByUrl`** |
+| `gaslens doc lint` | Fonctions sans intention (`doc.undocumented`) + `@param` en dérive (`doc.param_drift`) + `@returns` en dérive de la shape (`doc.return_drift`) + référence `{@link}`/`@see` périmée (`doc.stale_ref`). N'écrit jamais la prose |
 | `gaslens doc stub <fn>` | Squelette JSDoc à compléter (params détectés) |
 | `gaslens doctor [root]` | Checklist de prérequis auto-vérifiant (Node/clasp/plugin/manifeste). `--hook --quiet-when-ok` pour SessionStart |
 | `gaslens workspace init <nom>` | Scaffold un workspace complet (manifeste maître, `.claude/settings.json`, `.mcp.json`, `apps/backlog/docs`) |
 | `gaslens workspace add-app <nom>` | Onboarde une app : entrée `apps[]` (2 projets dev/prod) + `apps/<nom>/{dev,prod}` + `CLAUDE.md` d'app + rappel `clasp clone` |
+| `gaslens workspace overview [root]` | **Vue parc d'un coup** : apps × dev/prod, version de la bibliothèque consommée, verdict `env validate` par app/env, couverture doc — orientation en un appel |
 | `gaslens manifest` | Croise code ↔ `appsscript.json` : libs/scopes/services avancés/`urlFetchWhitelist` |
 | `gaslens validate-api` | Méthodes GAS hallucinées + arity manquante + méthodes dépréciées |
 | `gaslens lint-runtime` | Anti-patterns quota/lock/trigger (warn/info) |
@@ -254,10 +255,19 @@ gaslens env validate                 # valide les deux axes d'environnement
 
 - **`env.cross_env_leak`** (BREAK, le *finding-roi*) : un projet `prod` qui embarque en dur l'id d'une ressource `dev` (ou l'inverse) — il lirait/écrirait le **mauvais** environnement.
 - **`env.library_version_mismatch`** (BREAK) : un `prod` qui consomme la bibliothèque en HEAD/dev au lieu de la version figée.
-- **`env.hardcoded_resource`** (WARN) : un id de ressource codé en dur (du bon env, OU **non déclaré** au manifeste — détecté via `openById`/`getFileById`/…).
+- **`env.hardcoded_resource`** (WARN) : un id de ressource codé en dur (du bon env, OU **non déclaré** au manifeste — détecté via `openById`/`getFileById`/… **et `openByUrl('…/d/<ID>/…')`**, l'id extrait de l'URL).
 - **`env.undeclared_resource`** (WARN) : une ressource déclarée dans un env mais absente d'un autre (parc sous-provisionné).
 
+Pour s'orienter dans un parc multi-app, `gaslens workspace overview` synthétise en un appel : apps × dev/prod, version de lib consommée, verdict `env validate` par projet, et couverture doc.
+
 Le `gaslens doctor` (lancé au SessionStart) complète le tableau : Node ≥ 22, `clasp` connecté, cohérence `.clasp.json` ↔ manifeste, ADC, baseline par projet, plugin câblé.
+
+### Limites honnêtes d'`env validate` (frontières assumées)
+
+Fidèle à la doctrine « ne jamais bluffer une certitude » :
+
+- **La résolution cross-repo lie un consommateur `prod` au HEAD du dossier fournisseur (`core/prod`), pas à la version de bibliothèque réellement figée/déployée.** Un appel présent dans le HEAD mais absent de la version figée n'est donc PAS attrapé statiquement. Combler exigerait de *fetcher* la version figée (API Apps Script, hors périmètre du cœur hors-ligne). `env.library_version_mismatch` couvre l'axe *politique de version* ; l'axe *contenu de la version figée* reste hors statique.
+- **`env validate` suppose le manifeste maître complet et correct.** Il ne vérifie pas que les `script_id`/ressources déclarés existent réellement côté Google (il faudrait l'API). `env.undeclared_resource` est de la **pure cohérence de manifeste** : un projet qui hardcode tout sans rien déclarer ressort CLEAN sur cet axe — c'est `env.hardcoded_resource` (via les appels d'ouverture de ressource) qui le rattrape, dans la limite des APIs ancrées (`openById`/`getFileById`/`openByUrl`/…).
 
 ## Distribution : moteur npm + plugin Claude Code
 
@@ -334,6 +344,8 @@ Sur un petit projet (7 fichiers, 23 fonctions) :
 
 `gaslens scan --bench` affiche le breakdown des phases sur `stderr`. Sur de plus gros projets, le gain incrémental est proportionnel au ratio fichiers inchangés / total.
 
+Pour mesurer à l'échelle d'un vrai parc, `npm run bench:scale` (ou `node scripts/bench-scale.mjs --apps 5 --files 20`) génère un parc synthétique et chronométre full scan / incrémental fast-path / incrémental partial / `env validate` (workspace + scopé hook) / `workspace overview`. Sur ~200 fichiers, le coût par édition du hook (partial scan + `env validate` scopé) reste de l'ordre de la dizaine de ms — `env validate` ne domine pas, donc la migration vers un extracteur d'index n'est pas prioritaire.
+
 L'incrémental garantit **correctness > perf** : la détection « rien n'a changé » se fait par **hash de contenu** (jamais par mtime — non fiable juste après une écriture sur certains OS/FS, ce qui ferait rater une édition). Tout changement incertain (HTML modifié, `appsscript.json` modifié) déclenche un full scan. Pas de faux négatif silencieux.
 
 ---
@@ -354,9 +366,10 @@ Toute régression de détection casse une tâche → le test vitest correspondan
 ## Dev
 
 ```bash
-npm test            # vitest run — 440 tests
+npm test            # vitest run — 461 tests
 npm run build       # tsc → dist/
 gaslens eval        # régression sur le dataset de référence
+npm run bench:scale # bench à l'échelle d'un parc synthétique (F3)
 ```
 
 Conception complète :

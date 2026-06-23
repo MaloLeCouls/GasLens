@@ -84,12 +84,15 @@ src/
   gas-services.ts              liste de NOMS de services natifs (utilisée par le scanner pour classifier les receivers ; validation par méthode = gas-api.ts)
   ── V4 / V5 / multi-repo (LOTs A→E) ──
   workspace-manifest.ts        manifeste maître gaslens.workspace.json (schéma zod + loader + helpers) — source de vérité du parc (V4 §26-29)
-  env-validate.ts              `env validate` — 2 axes d'env : env.cross_env_leak / library_version_mismatch / hardcoded_resource / undeclared_resource (V4 §29)
-  doc-lint.ts                  `doc lint` / `doc stub` — doc.undocumented / doc.param_drift (V4 §25) ; réutilise extract/jsdoc.ts (FunctionDefinition.doc)
+  env-validate.ts              `env validate` — 2 axes d'env : env.cross_env_leak / library_version_mismatch / hardcoded_resource / undeclared_resource (V4 §29) ; ids en dur via openById/… ET openByUrl (extractIdFromUrl, F5a)
+  doc-lint.ts                  `doc lint` / `doc stub` — doc.undocumented / doc.param_drift / doc.return_drift / doc.stale_ref (V4 §25, F4) ; réutilise extract/jsdoc.ts (FunctionDoc.returns_desc + refs) + return_analysis.produced_object_fields
   doctor.ts                    `doctor` — prérequis (Node≥22, clasp, ADC, clasp-config↔manifeste, baselines par app, plugin) ; SessionStart (V5 §34, E3)
   workspace-init.ts            `workspace init` — scaffolder (manifeste, .claude/settings.json, .mcp.json, apps/backlog/docs) (V5 §33)
   workspace-add-app.ts         `workspace add-app` — onboarde une app (apps[] + apps/<nom>/{dev,prod} + rappel clasp clone) (E4)
+  parc-overview.ts             `workspace overview` — vue parc d'un coup (F6) : apps × dev/prod, version lib, verdict env validate par app/env, couverture doc ; réutilise runEnvValidate
 .claude-plugin/ skills/ commands/ hooks/ templates/ .mcp.json   FACE PLUGIN Claude Code (V5 §32) — installable via /plugin
+scripts/bench-scale.mjs        bench à l'échelle (F3) — parc synthétique, chronométre full/incrémental/env validate/overview (`npm run bench:scale`)
+.github/workflows/ci.yml       CI (F1) — build + test + eval sur matrice windows-latest + ubuntu-latest, Node 22
 eval/tasks/*.json              jeu de tâches de référence (édition → verdict attendu)
 tests/                         vitest ; fixtures/sample-project + fixtures/sample-workspace
 ```
@@ -140,14 +143,15 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`, **`env validate`**, **`doc lint`/`doc stub`**, **`doctor`**, **`workspace init`/`workspace add-app`**.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`, **`env validate`**, **`doc lint`/`doc stub`**, **`doctor`**, **`workspace init`/`workspace add-app`/`workspace overview`**.
 
 **V4 / V5 / multi-repo (LOTs A→E)** — voir `ROADMAP.md` :
 - **`env validate`** (V4 §29) : 2 axes d'environnement. `env.cross_env_leak` (BREAK, le finding-roi : id de ressource d'un autre env en dur), `env.library_version_mismatch` (prod en HEAD / mauvaise version figée), `env.hardcoded_resource` (id du bon env en dur, OU id non déclaré via openById/getFileById — E5), `env.undeclared_resource` (ressource déclarée dans un env mais pas un autre). Lit le manifeste maître ; intégré au pipeline `check`.
-- **`doc lint`/`doc stub`** (V4 §25) : `doc.undocumented` (info), `doc.param_drift` (warn). N'écrit jamais la prose. Extracteur étendu : `FunctionDefinition.doc` (présence/summary/param_tags).
-- **Le hook L1 lance désormais le pipeline `check` COMPLET** (`applyEnrichments` partagé) = diff + manifest + api + lint + **doc** + **env**. Avant E/A4 il ne faisait que le diff structurel — un break manifest/api/env ne bloquait pas.
+- **`doc lint`/`doc stub`** (V4 §25, étendu F4) : `doc.undocumented` (info), `doc.param_drift` (warn), `doc.return_drift` (warn, medium — `@returns` cite un champ backtické que la shape **autoritaire** ne produit plus ; s'abstient si retour opaque), `doc.stale_ref` (info — `{@link}`/`@see` vers un symbole ni du projet, ni service GAS, ni global JS). N'écrit jamais la prose. Extracteur étendu : `FunctionDoc.{returns_desc,refs}` + `ReturnAnalysis.{produced_object_fields,returns_only_object_literals}`.
+- **Le hook L1 lance désormais le pipeline `check` COMPLET** (`applyEnrichments` partagé) = diff + manifest + api + lint + **doc** + **env**. Avant E/A4 il ne faisait que le diff structurel — un break manifest/api/env ne bloquait pas. Les 6 `enrichWith*Findings` sont factorisés en `mergeFindings` (F10), façades exportées préservées.
 - **Multi-repo (LOT E)** : `scanWorkspace` nomme les projets par **chemin relatif** (`apps/dash/dev`, plus de collision `dev`/`prod` — E1) et lit le manifeste maître pour résoudre les appels `Lib.fn()` inter-repos en `cross_project_edges` **env-aware** (E2, `loadLibraryProviders`). `--project` accepte un suffixe (`dash/dev`).
 - **Face plugin** (V5 §32) : `.claude-plugin/{plugin,marketplace}.json`, `skills/` (7), `commands/` (4), `hooks/hooks.json` (PostToolUse→hook, SessionStart→doctor), `.mcp.json` (chrome-devtools épinglé `@1.3.0`), `templates/`. `package.json` → `@malolecouls/gaslens` (non publié).
+- **LOT F (durcissement post-merge)** : `workspace overview` (vue parc F6), `env validate` voit `openByUrl` (F5a), CI matricielle Win+Linux (F1), bench à l'échelle (F3, `npm run bench:scale`), test différentiel incrémental≡full (F2). **F2 a corrigé un vrai bug moteur** (cf. Pièges). Reste F5b (extracteur d'index, non urgent d'après le bench) et F9 (valider le plugin contre le vrai chargeur).
 
 **Ergonomie LLM (V3 §24 + extensions)** :
 - `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.
@@ -208,6 +212,7 @@ Les roadmaps V3, V4, V5 et le durcissement multi-repo (LOT E) sont livrés. Marc
 ## Pièges à ne jamais réintroduire (V2 §13)
 
 - Espace de noms **global** par projet : `foo()` dans `fileA.gs` résout vers `function foo` de `fileB.gs`. L'incrémental doit re-résoudre.
+- **Scan partial (F2)** : un fichier **caché** (inchangé) qui appelle une fonction supprimée/renommée dans un fichier **modifié** doit voir son `outbound_call` **reclassé en `unresolved`** (miroir du full scan). Sinon le hook dit `CLEAN` à tort sur un renommage cassant. Garde-fou : `tests/incremental-differential.test.ts` (incrémental ≡ full sur les findings).
 - `withUserObject(ctx)` **décale** les args du handler (`(retourServeur, userObject)`) — ne pas prendre `userObject` pour la shape de retour.
 - Les **scriptlets** `<?= fn() ?>` sont des call sites : un `check` qui les rate dit `CLEAN` à tort.
 - `google.script.run` : retour **non sérialisable** = bug latent (`serializable.broke`), pas une erreur d'analyse.

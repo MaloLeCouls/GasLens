@@ -121,6 +121,113 @@ describe('doc lint — param_drift', () => {
   });
 });
 
+describe('doc lint — return_drift (F4)', () => {
+  it('signale un @returns citant un champ que la shape ne produit plus (WARN)', async () => {
+    const root = await makeProject({
+      'a.gs': [
+        '/**',
+        " * Construit l'utilisateur.",
+        " * @returns {Object} l'objet avec `id` et `oldField`",
+        ' */',
+        "function getUser() { return { id: 1, name: 'a' }; }",
+      ].join('\n'),
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintDoc(idx, { checks: new Set(['return_drift']) });
+      const drift = report.findings.find((f) => f.consumer_kind === 'doc.return_drift');
+      expect(drift).toBeDefined();
+      expect(drift?.severity).toBe('warn');
+      expect(drift?.reason).toContain('oldField');
+      // 'id' est réellement produit → pas de finding pour lui.
+      expect(report.findings.filter((f) => f.consumer_kind === 'doc.return_drift')).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('aucun return_drift quand les champs cités correspondent à la shape', async () => {
+    const root = await makeProject({
+      'a.gs': [
+        '/**',
+        " * Construit l'utilisateur.",
+        ' * @returns {Object} avec `id` et `name`',
+        ' */',
+        "function getUser() { return { id: 1, name: 'a' }; }",
+      ].join('\n'),
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintDoc(idx, { checks: new Set(['return_drift']) });
+      expect(report.findings.some((f) => f.consumer_kind === 'doc.return_drift')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("s'abstient quand la shape de retour n'est pas autoritaire (retour opaque)", async () => {
+    const root = await makeProject({
+      'a.gs': [
+        '/**',
+        ' * Relaie au helper.',
+        ' * @returns {Object} avec `ghost`',
+        ' */',
+        'function getUser() { return helper_(); }',
+        'function helper_() { return { id: 1 }; }',
+      ].join('\n'),
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintDoc(idx, { checks: new Set(['return_drift']) });
+      expect(report.findings.some((f) => f.consumer_kind === 'doc.return_drift')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('doc lint — stale_ref (F4)', () => {
+  it('signale une référence {@link} vers un symbole inexistant (info)', async () => {
+    const root = await makeProject({
+      'a.gs': [
+        '/**',
+        ' * Voir {@link disparu} pour le détail.',
+        ' */',
+        'function main() { return 1; }',
+      ].join('\n'),
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintDoc(idx, { checks: new Set(['stale_ref']) });
+      const stale = report.findings.find((f) => f.consumer_kind === 'doc.stale_ref');
+      expect(stale).toBeDefined();
+      expect(stale?.severity).toBe('info');
+      expect(stale?.reason).toContain('disparu');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ne flague ni une fonction existante ni un service GAS natif', async () => {
+    const root = await makeProject({
+      'a.gs': [
+        '/**',
+        ' * Voir {@link helperX} et {@link SpreadsheetApp}.',
+        ' */',
+        'function main() { return helperX(); }',
+        'function helperX() { return 1; }',
+      ].join('\n'),
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintDoc(idx, { checks: new Set(['stale_ref']) });
+      expect(report.findings.some((f) => f.consumer_kind === 'doc.stale_ref')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('doc stub', () => {
   it('émet un squelette avec les params détectés', async () => {
     const root = await makeProject({

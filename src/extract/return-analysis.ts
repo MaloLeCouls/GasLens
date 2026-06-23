@@ -16,12 +16,19 @@ export function analyzeReturns(body: SyntaxNode, file: string): ReturnAnalysis {
     serializable: 'unknown',
     non_serializable_reasons: [],
     has_open_object: false,
+    produced_object_fields: [],
+    returns_only_object_literals: false,
   };
 
   const returns = body.descendantsOfType('return_statement');
   if (returns.length === 0) {
     // Pas de return explicite → renvoie implicitement undefined → considéré comme
     // 'unknown' (le call site peut ne pas attendre de valeur).
+    if (body.type !== 'statement_block') {
+      // Arrow à corps-expression : la shape produite est l'expression elle-même.
+      analyzeProducedShape(body, out);
+    }
+    finalizeProducedShape(out);
     return out;
   }
 
@@ -31,6 +38,8 @@ export function analyzeReturns(body: SyntaxNode, file: string): ReturnAnalysis {
   if (body.type !== 'statement_block') {
     classifyReturnValue(body, file, body.startPosition.row + 1, out);
     if (out.serializable === 'unknown') out.serializable = true;
+    analyzeProducedShape(body, out);
+    finalizeProducedShape(out);
     return out;
   }
 
@@ -46,12 +55,100 @@ export function analyzeReturns(body: SyntaxNode, file: string): ReturnAnalysis {
     }
     anyAnalyzable = true;
     classifyReturnValue(value, file, line, out);
+    analyzeProducedShape(value, out);
   }
   // Si tous les returns sont non-sérialisables, on garde false. Sinon true.
   if (anyAnalyzable && out.serializable === 'unknown') {
     out.serializable = out.non_serializable_reasons.length > 0 ? false : true;
   }
+  finalizeProducedShape(out);
   return out;
+}
+
+/**
+ * État interne accumulé pendant l'analyse de la *shape produite* (clés des
+ * objets renvoyés). Séparé de `ReturnAnalysis` (qui n'expose que le résultat
+ * final dédupliqué) pour suivre les drapeaux d'autorité.
+ */
+const SHAPE_STATE = new WeakMap<
+  ReturnAnalysis,
+  { fields: Set<string>; sawObjectLiteral: boolean; sawOpaque: boolean }
+>();
+
+function shapeState(out: ReturnAnalysis) {
+  let s = SHAPE_STATE.get(out);
+  if (!s) {
+    s = { fields: new Set<string>(), sawObjectLiteral: false, sawOpaque: false };
+    SHAPE_STATE.set(out, s);
+  }
+  return s;
+}
+
+/**
+ * Classifie la valeur d'un return *au niveau supérieur* pour la shape produite :
+ *   - objet littéral → collecte les clés littérales (les clés calculées /
+ *     spreads rendent la shape non-autoritaire) ;
+ *   - null / undefined → neutre ;
+ *   - ternaire → récurse sur les deux branches ;
+ *   - parenthèses → unwrap ;
+ *   - tout le reste (appel, identifiant, tableau, `new`, …) → opaque
+ *     (on s'abstiendra de flaguer une dérive).
+ */
+function analyzeProducedShape(value: SyntaxNode, out: ReturnAnalysis): void {
+  const s = shapeState(out);
+  if (isNullOrUndefined(value)) return;
+  switch (value.type) {
+    case 'object': {
+      s.sawObjectLiteral = true;
+      for (const child of value.namedChildren) {
+        if (child.type === 'pair') {
+          const key = child.childForFieldName('key');
+          if (!key) continue;
+          if (key.type === 'property_identifier') s.fields.add(key.text);
+          else if (key.type === 'string') s.fields.add(stripQuotes(key.text));
+          else s.sawOpaque = true; // clé calculée → shape non fermée
+        } else if (child.type === 'shorthand_property_identifier') {
+          s.fields.add(child.text);
+        } else if (child.type === 'method_definition') {
+          const name = child.childForFieldName('name');
+          if (name) s.fields.add(name.text);
+        } else if (child.type === 'spread_element') {
+          s.sawOpaque = true; // `{...other}` → champs inconnus
+        }
+      }
+      return;
+    }
+    case 'parenthesized_expression': {
+      const inner = value.namedChildren[0];
+      if (inner) analyzeProducedShape(inner, out);
+      return;
+    }
+    case 'ternary_expression': {
+      const cons = value.childForFieldName('consequence');
+      const alt = value.childForFieldName('alternative');
+      if (cons) analyzeProducedShape(cons, out);
+      if (alt) analyzeProducedShape(alt, out);
+      return;
+    }
+    default:
+      s.sawOpaque = true;
+      return;
+  }
+}
+
+function finalizeProducedShape(out: ReturnAnalysis): void {
+  const s = SHAPE_STATE.get(out);
+  if (!s) return;
+  out.produced_object_fields = [...s.fields].sort();
+  out.returns_only_object_literals = s.sawObjectLiteral && !s.sawOpaque;
+  SHAPE_STATE.delete(out);
+}
+
+function stripQuotes(s: string): string {
+  if (s.length >= 2 && (s[0] === '"' || s[0] === "'" || s[0] === '`')) {
+    return s.slice(1, -1);
+  }
+  return s;
 }
 
 /**

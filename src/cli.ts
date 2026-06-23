@@ -44,6 +44,7 @@ import {
   gitInitAndCommit,
 } from './workspace-init.js';
 import { runAddApp } from './workspace-add-app.js';
+import { buildParcOverview, renderParcOverviewText } from './parc-overview.js';
 import { warnIfStale } from './stale-check.js';
 import type { ProjectIndex, WorkspaceIndex } from './types.js';
 
@@ -1463,6 +1464,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--project <name>', "Cibler un seul projet d'un index workspace")
     .option('--undocumented', 'Ne lister que les fonctions sans intention', false)
     .option('--drift', 'Ne lister que les @param en dérive', false)
+    .option('--return-drift', 'Ne lister que les @returns en dérive de la shape', false)
+    .option('--stale-ref', 'Ne lister que les références doc périmées ({@link}/@see)', false)
     .option('--public-only', 'Ignorer les fonctions privées (suffixe _)', false)
     .option('--format <fmt>', 'json | text', 'json')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
@@ -1476,6 +1479,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       const checks = new Set<DocCheck>();
       if (opts.undocumented) checks.add('undocumented');
       if (opts.drift) checks.add('drift');
+      if (opts.returnDrift) checks.add('return_drift');
+      if (opts.staleRef) checks.add('stale_ref');
       const reports = targets.map((p) =>
         lintDoc(p, { checks, publicOnly: opts.publicOnly }),
       );
@@ -1579,6 +1584,28 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.stdout.write('Prochaines étapes :\n');
         for (const s of res.nextSteps) process.stdout.write(`  - ${s}\n`);
       }
+      process.exit(0);
+    });
+
+  workspace
+    .command('overview')
+    .description(
+      "Vue « parc » d'un coup (F6) : apps × dev/prod, version de la bibliothèque " +
+        "mère consommée, verdict env validate par app/env, couverture doc. Lit le " +
+        "manifeste maître + scanne chaque projet. 100 % statique, hors hook chaud.",
+    )
+    .argument('[root]', 'Racine du workspace (on remonte au manifeste maître)', '.')
+    .option('--no-scan', 'Sauter le scan (pas de couverture doc / compte de fonctions) — plus rapide')
+    .option('--format <fmt>', 'json | text', 'text')
+    .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .action(async (root: string, opts: ParcOverviewCliOpts) => {
+      const report = await buildParcOverview({ root: resolve(root), noScan: !opts.scan });
+      if (opts.format === 'json') {
+        process.stdout.write(jsonOut(report, opts.compact) + '\n');
+      } else {
+        process.stdout.write(renderParcOverviewText(report) + '\n');
+      }
+      if (report.env_verdict === 'BREAK') process.exit(3);
       process.exit(0);
     });
 
@@ -1713,6 +1740,8 @@ interface DocLintCliOpts {
   project?: string;
   undocumented: boolean;
   drift: boolean;
+  returnDrift: boolean;
+  staleRef: boolean;
   publicOnly: boolean;
   format: string;
   compact: boolean;
@@ -1742,6 +1771,12 @@ interface AddAppCliOpts {
   force: boolean;
 }
 
+interface ParcOverviewCliOpts {
+  scan: boolean;
+  format: string;
+  compact: boolean;
+}
+
 interface CommandOverviewEntry {
   name: string;
   tldr: string;
@@ -1766,6 +1801,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'doctor [root]', tldr: 'checklist prérequis auto-vérifiant (Node/clasp/plugin/manifeste) ; --hook --quiet-when-ok', reads_index: false, emits_findings: false },
   { name: 'workspace init <nom>', tldr: 'scaffold workspace (manifeste, .claude/settings, .mcp.json, apps/backlog/docs)', reads_index: false, emits_findings: false },
   { name: 'workspace add-app <nom>', tldr: 'onboarde une app (entrée manifeste + apps/<nom>/{dev,prod} + rappel clasp clone)', reads_index: false, emits_findings: false },
+  { name: 'workspace overview [root]', tldr: 'vue parc d\'un coup : apps × dev/prod, version lib, verdict env validate, couverture doc', reads_index: false, emits_findings: false },
   { name: 'resolve-live', tldr: 'inventaire libs + cache disque + enrich-workspace (--enrich-output) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'prod-truth', tldr: 'croise expositions × métriques prod (--use-apps-script-api : processes:listScriptProcesses) ; hors hook chaud', reads_index: true, emits_findings: false },
   { name: 'deploy-aware', tldr: 'conscience des déploiements (live_web_app / live_addon / live_api / head_only) ; hors hook chaud', reads_index: true, emits_findings: false },

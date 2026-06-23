@@ -151,46 +151,64 @@ env-aware (Core.formatDate ← dash) + propagation au caller. Simulation CLI rej
 > partiel préserve bien les agrégats des fichiers inchangés (manifest/api/lint d'un fichier
 > non touché restent détectés — testé empiriquement).
 
+> **Passe d'implémentation (2026-06-23)** : F1, F2, F3, F4, F6, F7, F8, F10 livrés ;
+> F5 partiellement (a-`openByUrl`). F9 reste (nécessite une install réelle). **Bonus :** F2
+> a débusqué et corrigé un **vrai bug du moteur incrémental** (cf. note sous F2). 461 tests, eval 18/18.
+
 ### Haut levier (sûr, rapide — à faire en premier)
 
-- [ ] **F1 — CI GitHub Actions** : build + test + eval sur **matrice Windows + Linux**, Node 22.
-  Les 2 bugs trouvés (CRLF au checkout Windows ; fast-path mtime) étaient OS-spécifiques — une CI
-  matricielle les aurait attrapés. Prérequis avant `npm publish`.
-- [ ] **F2 — Test différentiel incrémental ≡ full scan** : pour un échantillon d'éditions,
-  `scan --incremental` doit produire des findings identiques à un full re-scan. Verrouille la
-  correction (vérifiée à la main) du chemin le plus subtil du moteur.
-- [ ] **F3 — Bench à l'échelle réelle** : mesurer sur un parc représentatif (≈5 apps × 2 envs ×
-  20 fichiers) — surtout le coût par édition d'`env validate` (qui relit les sources via le hook).
-  Décide si l'extracteur d'index (F5b) devient prioritaire.
+- [x] **F1 — CI GitHub Actions** : `.github/workflows/ci.yml` — build + test + eval sur **matrice
+  windows-latest + ubuntu-latest**, Node 22, `concurrency` cancel-in-progress, fallback
+  `npm ci`→`npm install`. Prérequis avant `npm publish`.
+- [x] **F2 — Test différentiel incrémental ≡ full scan** : `tests/incremental-differential.test.ts`
+  — 6 scénarios d'édition (rename cross-file, serializable.broke, API hallucinée, cible scriptlet
+  HTML, param_drift, quota in loop) ; pour chacun, les findings normalisés + verdict de
+  `scan --incremental` doivent égaler le full re-scan.
+  ↳ **Bug moteur corrigé** : dans le chemin partial, un fichier **caché** appelant une fonction
+  supprimée/renommée dans un fichier **modifié** gardait son appel « résolu » (`unresolved_calls`
+  vide) → le hook disait CLEAN à tort sur un renommage cassant. Correctif `scanner.ts` : re-résout
+  les `outbound_calls` des fichiers cachés contre le set final, reclasse les cibles disparues en
+  `unresolved_bare` (miroir exact du full scan).
+- [x] **F3 — Bench à l'échelle réelle** : `scripts/bench-scale.mjs` (`npm run bench:scale`) — génère
+  un parc synthétique (`--apps`/`--files`), chronométre full/incrémental(fast+partial)/`env validate`
+  (workspace + scopé hook)/`workspace overview`. **Verdict mesuré** : sur ~200 fichiers, coût/édition
+  ≈ partial 11 ms + env validate 6 ms ; `env validate` **ne domine pas** (ratio 0.6×) → F5b non
+  prioritaire.
 
 ### Profondeur fonctionnelle (specs déjà écrites, non finies)
 
-- [ ] **F4 — `doc lint` : `return_drift` + `stale_ref`** (V4 §25.3) : `@returns` décrivant un champ
-  que la shape ne produit plus ; description mentionnant un symbole disparu. (Seuls `undocumented`
-  + `param_drift` livrés.)
-- [ ] **F5 — Précision des ids de ressources** : (a) couvrir `openByUrl('…/d/<ID>/…')` (ids dans
-  une URL) et les ids passés via variable ; (b) migrer la détection vers un **extracteur d'index**
-  (hot-path sans relire les sources — ex-A2-ter/E5).
-- [ ] **F6 — Vue « parc » d'un coup** : commande (ou `map` workspace enrichi) montrant apps ×
-  dev/prod, versions de lib, verdict `env validate`, couverture doc — pour qu'un agent s'oriente
-  dans un parc multi-app en un appel.
+- [x] **F4 — `doc lint` : `return_drift` + `stale_ref`** (V4 §25.3) : `doc.return_drift` (warn,
+  confidence medium — `@returns` cite un champ entre backticks que la shape **autoritaire** ne produit
+  plus ; s'abstient si le retour est opaque) et `doc.stale_ref` (info — `{@link X}`/`@see X` vers un
+  symbole ni du projet, ni service GAS, ni global JS). Extracteur étendu : `FunctionDoc.returns_desc`
+  + `refs` ; `ReturnAnalysis.produced_object_fields` + `returns_only_object_literals`. Flags CLI
+  `--return-drift`/`--stale-ref`. Branchés au hook via `enrichWithDocFindings`.
+- [~] **F5 — Précision des ids de ressources** : **(a-partiel) livré** — `openByUrl('…/d/<ID>/…'`
+  et `/folders/<ID>`) : `extractIdFromUrl` extrait l'id de l'URL (env-validate). **Restent** : ids
+  passés via variable, et **(b)** migration vers un extracteur d'index (hot-path) — différés
+  (refinement perf, agrégation incrémentale fragile ; bench F3 confirme la non-urgence).
+- [x] **F6 — Vue « parc » d'un coup** : `gaslens workspace overview [root]` (`src/parc-overview.ts`)
+  — apps × dev/prod, version de lib consommée + mode (HEAD/pinned), verdict `env validate` par
+  app/env, couverture doc (% fonctions publiques documentées). Réutilise `runEnvValidate`. `--no-scan`
+  pour la version rapide (sans doc/compte). Hors hook chaud.
 
-### Limites honnêtes (à documenter / certaines hors statique)
+### Limites honnêtes (documentées — README §« Limites honnêtes d'`env validate` »)
 
-- [ ] **F7 — Prod résout sur le HEAD, pas la version figée** : la résolution cross-repo env-aware
-  lie un consommateur `prod` au dossier `core/prod` (son HEAD), pas à la version de lib réellement
-  figée/déployée → un appel présent en HEAD mais absent de la version figée n'est pas attrapé
-  statiquement. Combler = fetcher la version figée (API, hors périmètre) ; au minimum, documenter.
-- [ ] **F8 — `env validate` suppose le manifeste maître complet/correct** : ne vérifie pas que les
-  `script_id`/ressources déclarés existent réellement (faudrait l'API). `undeclared_resource` est
-  pure cohérence de manifeste.
-- [ ] **F9 — Valider `plugin.json`/`marketplace.json` contre le vrai chargeur Claude Code** (suivi
-  la spec V5, jamais testé par une install réelle).
+- [x] **F7 — Prod résout sur le HEAD, pas la version figée** : documenté. La résolution cross-repo
+  env-aware lie un consommateur `prod` au HEAD du dossier fournisseur, pas à la version figée/déployée
+  → un appel présent en HEAD mais absent de la version figée n'est pas attrapé statiquement (combler =
+  fetcher la version figée via API, hors périmètre).
+- [x] **F8 — `env validate` suppose le manifeste maître complet/correct** : documenté. Ne vérifie pas
+  l'existence réelle des `script_id`/ressources (faudrait l'API) ; `undeclared_resource` = pure
+  cohérence de manifeste, rattrapée par `hardcoded_resource` dans la limite des APIs ancrées.
+- [ ] **F9 — Valider `plugin.json`/`marketplace.json` contre le vrai chargeur Claude Code** (suit
+  la spec V5, jamais testé par une install réelle — hors portée d'un test statique).
 
 ### Cleanup interne (mineur)
 
-- [ ] **F10 — Factoriser les 6 `enrichWith*Findings`** de `check.ts` (quasi identiques) en une
-  seule fonction paramétrée. Zéro impact comportemental.
+- [x] **F10 — Factoriser les 6 `enrichWith*Findings`** de `check.ts` en une seule `mergeFindings`
+  paramétrée ; les 6 fonctions restent exportées (façades — eval.ts/mcp-server.ts les importent).
+  Zéro impact comportemental (461 tests + eval inchangés).
 
 ### Hors-périmètre outil (décision utilisateur, non bloquant)
 `npm publish` (`@malolecouls/gaslens`, prêt) · tag de release `vX.Y.Z` (pin plugin `#vX`) ·

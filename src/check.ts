@@ -57,20 +57,29 @@ export async function runCheck(opts: CheckOptions): Promise<CheckResult> {
   return { report: enriched, exit_code };
 }
 
-export function enrichWithManifestFindings(
+/**
+ * Cœur partagé d'enrichissement (factorisé — LOT F10). Fusionne une liste de
+ * findings candidats dans le rapport : filtre par seuil de sévérité, range
+ * chaque finding dans `breaks`/`warns`/`safe`, et recalcule verdict + summary.
+ *
+ * Les six `enrichWith*Findings` ci-dessous n'en sont plus que de fines façades
+ * (source des candidats + nom stable pour les importeurs). No-op rapide quand il
+ * n'y a aucun candidat à retenir — préserve l'identité du rapport d'entrée.
+ */
+function mergeFindings(
   report: DiffReport,
-  current: ProjectIndex,
+  candidates: Finding[],
   threshold: 'info' | 'warn' | 'break',
 ): DiffReport {
-  const manifest = analyzeManifest(current);
-  if (manifest.findings.length === 0) return report;
-  const extra = manifest.findings.filter((f) =>
-    keepBySeverity(f, threshold),
-  );
+  if (candidates.length === 0) return report;
+  const extra = candidates.filter((f) => keepBySeverity(f, threshold));
   if (extra.length === 0) return report;
   const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
   const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
-  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
+  const safe: Finding[] = [
+    ...report.safe,
+    ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info'),
+  ];
   const verdict = aggregateVerdict(breaks, warns);
   return {
     ...report,
@@ -91,27 +100,20 @@ function keepBySeverity(
   return true;
 }
 
+export function enrichWithManifestFindings(
+  report: DiffReport,
+  current: ProjectIndex,
+  threshold: 'info' | 'warn' | 'break',
+): DiffReport {
+  return mergeFindings(report, analyzeManifest(current).findings, threshold);
+}
+
 export function enrichWithApiFindings(
   report: DiffReport,
   current: ProjectIndex,
   threshold: 'info' | 'warn' | 'break',
 ): DiffReport {
-  const api = validateApi(current);
-  if (api.findings.length === 0) return report;
-  const extra = api.findings.filter((f) => keepBySeverity(f, threshold));
-  if (extra.length === 0) return report;
-  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
-  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
-  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
-  const verdict = aggregateVerdict(breaks, warns);
-  return {
-    ...report,
-    breaks,
-    warns,
-    safe,
-    verdict,
-    summary: summarize(breaks, warns, report.coverage.resolved_pct),
-  };
+  return mergeFindings(report, validateApi(current).findings, threshold);
 }
 
 export function enrichWithLintRuntimeFindings(
@@ -119,22 +121,7 @@ export function enrichWithLintRuntimeFindings(
   current: ProjectIndex,
   threshold: 'info' | 'warn' | 'break',
 ): DiffReport {
-  const lint = lintRuntime(current);
-  if (lint.findings.length === 0) return report;
-  const extra = lint.findings.filter((f) => keepBySeverity(f, threshold));
-  if (extra.length === 0) return report;
-  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
-  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
-  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
-  const verdict = aggregateVerdict(breaks, warns);
-  return {
-    ...report,
-    breaks,
-    warns,
-    safe,
-    verdict,
-    summary: summarize(breaks, warns, report.coverage.resolved_pct),
-  };
+  return mergeFindings(report, lintRuntime(current).findings, threshold);
 }
 
 export function enrichWithLintWebappFindings(
@@ -142,51 +129,22 @@ export function enrichWithLintWebappFindings(
   current: ProjectIndex,
   threshold: 'info' | 'warn' | 'break',
 ): DiffReport {
-  const lint = lintWebapp(current);
-  if (lint.findings.length === 0) return report;
-  const extra = lint.findings.filter((f) => keepBySeverity(f, threshold));
-  if (extra.length === 0) return report;
-  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
-  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
-  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
-  const verdict = aggregateVerdict(breaks, warns);
-  return {
-    ...report,
-    breaks,
-    warns,
-    safe,
-    verdict,
-    summary: summarize(breaks, warns, report.coverage.resolved_pct),
-  };
+  return mergeFindings(report, lintWebapp(current).findings, threshold);
 }
 
 /**
  * Enrichit le rapport avec les findings de documentation (V4 §25). Branché en
- * L1 : avec un seuil `warn`, seul `doc.param_drift` (dérive de signature)
- * remonte ; `doc.undocumented` (info, le « highlight ») reste consultable via
- * `gaslens doc lint` sans bloquer l'édition.
+ * L1 : avec un seuil `warn`, `doc.param_drift`/`doc.return_drift` (dérive de
+ * signature/shape) remontent ; `doc.undocumented` (info, le « highlight ») et
+ * `doc.stale_ref` (info) restent consultables via `gaslens doc lint` sans
+ * bloquer l'édition.
  */
 export function enrichWithDocFindings(
   report: DiffReport,
   current: ProjectIndex,
   threshold: 'info' | 'warn' | 'break',
 ): DiffReport {
-  const doc = lintDoc(current);
-  if (doc.findings.length === 0) return report;
-  const extra = doc.findings.filter((f) => keepBySeverity(f, threshold));
-  if (extra.length === 0) return report;
-  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
-  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
-  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
-  const verdict = aggregateVerdict(breaks, warns);
-  return {
-    ...report,
-    breaks,
-    warns,
-    safe,
-    verdict,
-    summary: summarize(breaks, warns, report.coverage.resolved_pct),
-  };
+  return mergeFindings(report, lintDoc(current).findings, threshold);
 }
 
 /**
@@ -221,21 +179,7 @@ export async function enrichWithEnvFindings(
   threshold: 'info' | 'warn' | 'break',
 ): Promise<DiffReport> {
   const env = await runEnvValidate({ root });
-  if (env.findings.length === 0) return report;
-  const extra = env.findings.filter((f) => keepBySeverity(f, threshold));
-  if (extra.length === 0) return report;
-  const breaks: Finding[] = [...report.breaks, ...extra.filter((f) => f.severity === 'break')];
-  const warns: Finding[] = [...report.warns, ...extra.filter((f) => f.severity === 'warn')];
-  const safe: Finding[] = [...report.safe, ...extra.filter((f) => f.severity === 'safe' || f.severity === 'info')];
-  const verdict = aggregateVerdict(breaks, warns);
-  return {
-    ...report,
-    breaks,
-    warns,
-    safe,
-    verdict,
-    summary: summarize(breaks, warns, report.coverage.resolved_pct),
-  };
+  return mergeFindings(report, env.findings, threshold);
 }
 
 export function exitCodeFor(verdict: Verdict, fail_on: 'break' | 'warn' | 'never'): number {

@@ -20,7 +20,8 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "scan": "node ./bin/gaslens.js scan"
+    "scan": "node ./bin/gaslens.js scan",
+    "bench:scale": "node scripts/bench-scale.mjs"
   },
   "files": [
     "dist",
