@@ -59,6 +59,7 @@ src/
     html-webapp.ts             signaux pour lint-webapp (refs http://, <a> sans target, <form> sans preventDefault, <base target>)
     uncertainty.ts             alimente coverage (dispatch dynamique, etc.)
   inspect.ts / impact.ts / diff.ts / check.ts / hook.ts    les commandes
+  guard.ts                     `guard --event pre-tool-use` — garde-fou déterministe (G3) : bloque un clasp push/deploy vers un projet prod si env validate est BREAK ; calque hook.ts (lit stdin)
   map.ts                       table des matières compacte (V3 §21.5) — projection seule de l'index
   manifest.ts                  parse complet d'appsscript.json (scopes, libs, advanced services, whitelist)
   manifest-analysis.ts         croise code ↔ manifeste (V3 §21.1) : library.undeclared/.unused, advanced_service.missing/.unused, scope.missing/.unused, urlfetch.not_whitelisted
@@ -151,7 +152,7 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - **`doc lint`/`doc stub`** (V4 §25, étendu F4) : `doc.undocumented` (info), `doc.param_drift` (warn), `doc.return_drift` (warn, medium — `@returns` cite un champ backtické que la shape **autoritaire** ne produit plus ; s'abstient si retour opaque), `doc.stale_ref` (info — `{@link}`/`@see` vers un symbole ni du projet, ni service GAS, ni global JS). N'écrit jamais la prose. Extracteur étendu : `FunctionDoc.{returns_desc,refs}` + `ReturnAnalysis.{produced_object_fields,returns_only_object_literals}`.
 - **Le hook L1 lance désormais le pipeline `check` COMPLET** (`applyEnrichments` partagé) = diff + manifest + api + lint + **doc** + **env**. Avant E/A4 il ne faisait que le diff structurel — un break manifest/api/env ne bloquait pas. Les 6 `enrichWith*Findings` sont factorisés en `mergeFindings` (F10), façades exportées préservées.
 - **Multi-repo (LOT E)** : `scanWorkspace` nomme les projets par **chemin relatif** (`apps/dash/dev`, plus de collision `dev`/`prod` — E1) et lit le manifeste maître pour résoudre les appels `Lib.fn()` inter-repos en `cross_project_edges` **env-aware** (E2, `loadLibraryProviders`). `--project` accepte un suffixe (`dash/dev`).
-- **Face plugin** (V5 §32) : `.claude-plugin/{plugin,marketplace}.json`, `skills/` (8, dont `request-evolution` G0), `commands/` (4), `hooks/hooks.json` (PostToolUse→hook, SessionStart→doctor), `.mcp.json` (chrome-devtools épinglé `@1.3.0`), `templates/`. `package.json` → `@malolecouls/gaslens` (non publié).
+- **Face plugin** (V5 §32) : `.claude-plugin/{plugin,marketplace}.json`, `skills/` (8, dont `request-evolution` G0), `commands/` (4), `hooks/hooks.json` (**PreToolUse(Bash)→guard** G3, PostToolUse→hook, SessionStart→doctor), `.mcp.json` (chrome-devtools épinglé `@1.3.0`), `templates/`. `package.json` → `@malolecouls/gaslens` (non publié).
 - **LOT F (durcissement post-merge)** : `workspace overview` (vue parc F6), `env validate` voit `openByUrl` (F5a), CI matricielle Win+Linux (F1), bench à l'échelle (F3, `npm run bench:scale`), test différentiel incrémental≡full (F2). **F2 a corrigé un vrai bug moteur** (cf. Pièges). Reste F5b (extracteur d'index, non urgent d'après le bench) et F9 (valider le plugin contre le vrai chargeur).
 
 **Ergonomie LLM (V3 §24 + extensions)** :

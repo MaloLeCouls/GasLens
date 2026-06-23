@@ -14,6 +14,7 @@ import { impact, parseChangeSpec } from './impact.js';
 import { diffIndexes } from './diff.js';
 import { runCheck, exitCodeFor } from './check.js';
 import { runHook } from './hook.js';
+import { runGuard } from './guard.js';
 import {
   CLAUDE_MD_ROOT,
   CLAUDE_SETTINGS_JSON,
@@ -1244,6 +1245,35 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     });
 
   program
+    .command('guard')
+    .description(
+      "Garde-fou déterministe PreToolUse (G3) : lit le payload JSON sur stdin, " +
+        "et si la commande est un clasp push/deploy/create-deployment ciblant un " +
+        "projet PROD dont `gaslens env validate` est en BREAK, BLOQUE la publication. " +
+        "Tout doute (non-clasp, cible non-prod, env non-BREAK) → laisse passer.",
+    )
+    .requiredOption('--event <name>', "Type d'événement hook (seul `pre-tool-use` est supporté)")
+    .action(async (opts: HookCliOpts) => {
+      if (opts.event !== 'pre-tool-use') {
+        process.stderr.write(
+          `gaslens guard: --event '${opts.event}' inconnu. Supporté : pre-tool-use.\n`,
+        );
+        process.exit(0);
+      }
+      const stdinJson = await readAllStdin();
+      const outcome = await runGuard({ stdinJson });
+      if (outcome.kind === 'block') {
+        // PreToolUse : exit 2 + stderr = blocage déterministe (la raison est
+        // ré-injectée à l'agent) ; on émet aussi le JSON pour les harnais qui
+        // lisent stdout.
+        process.stdout.write(outcome.hookPayload + '\n');
+        process.stderr.write(outcome.reason + '\n');
+        process.exit(2);
+      }
+      process.exit(0);
+    });
+
+  program
     .command('emit-dts')
     .description(
       "Génère un fichier .d.ts pour `google.script.run` côté client (V2 §8.4). " +
@@ -1877,6 +1907,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'emit-dts', tldr: '.d.ts pour google.script.run côté client', reads_index: true, emits_findings: false },
   { name: 'emit-contract-tests', tldr: 'harnais de test de contrat (--runner clasp|gas-fakes ; gas-fakes = local Node)', reads_index: true, emits_findings: false },
   { name: 'hook --event', tldr: 'hook PostToolUse : pipeline check complet (diff+manifest+api+lint+doc+env) à chaque édition', reads_index: false, emits_findings: true },
+  { name: 'guard --event pre-tool-use', tldr: 'garde-fou PreToolUse : bloque un clasp push/deploy vers un projet prod si env validate est BREAK', reads_index: false, emits_findings: false },
   { name: 'init', tldr: 'recettes CLAUDE.md / settings.json / SKILL.md', reads_index: false, emits_findings: false },
   { name: 'eval', tldr: 'rejoue le dataset de référence', reads_index: false, emits_findings: false },
   { name: 'commands', tldr: 'cette liste', reads_index: false, emits_findings: false },

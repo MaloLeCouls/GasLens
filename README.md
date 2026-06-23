@@ -122,6 +122,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens commands` | Liste compacte des commandes (utile pour un agent qui découvre l'outil) |
 | `gaslens init --section <name>` | Recettes prêtes à coller (CLAUDE.md / settings.json / SKILL.md) |
 | `gaslens hook --event post-tool-use` | Hook PostToolUse Claude Code (lit le payload sur stdin) |
+| `gaslens guard --event pre-tool-use` | **Garde-fou PreToolUse déterministe** : bloque un `clasp push`/`deploy` vers un projet **prod** si `env validate` est en BREAK (lit le payload sur stdin) |
 | `gaslens eval` | Rejoue le dataset de tâches de référence (régression auto) |
 
 Toutes les commandes acceptent `--format json|text` et `--compact` (JSON sans indentation — ~30 % de tokens en moins, idéal pour la consommation par un agent IA).

@@ -51,6 +51,10 @@ describe('plugin — hooks & mcp', () => {
     const start = h.hooks.SessionStart[0];
     expect(start.hooks[0].command).toContain('gaslens doctor');
     expect(start.hooks[0].command).toContain('--quiet-when-ok');
+    // G3 : garde-fou PreToolUse sur Bash → gaslens guard.
+    const pre = h.hooks.PreToolUse[0];
+    expect(pre.matcher).toBe('Bash');
+    expect(pre.hooks[0].command).toContain('gaslens guard');
   });
 
   it('.mcp.json déclare chrome-devtools en --autoConnect, version épinglée', () => {
