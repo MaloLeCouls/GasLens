@@ -86,7 +86,7 @@ src/
   workspace-manifest.ts        manifeste maître gaslens.workspace.json (schéma zod + loader + helpers) — source de vérité du parc (V4 §26-29)
   env-validate.ts              `env validate` — 2 axes d'env : env.cross_env_leak / library_version_mismatch / hardcoded_resource / undeclared_resource (V4 §29) ; ids en dur via openById/… ET openByUrl (extractIdFromUrl, F5a)
   doc-lint.ts                  `doc lint` / `doc stub` — doc.undocumented / doc.param_drift / doc.return_drift / doc.stale_ref (V4 §25, F4) ; réutilise extract/jsdoc.ts (FunctionDoc.returns_desc + refs) + return_analysis.produced_object_fields
-  doctor.ts                    `doctor` — prérequis (Node≥22, clasp, ADC, clasp-config↔manifeste, baselines par app, plugin) ; SessionStart (V5 §34, E3)
+  doctor.ts                    `doctor` — prérequis (Node≥22, clasp, ADC, clasp-config↔manifeste, baselines par app, plugin, bibliothèque mère déclarée) ; SessionStart (V5 §34, E3, F-corr B)
   workspace-init.ts            `workspace init` — scaffolder (manifeste, .claude/settings.json, .mcp.json, apps/backlog/docs) (V5 §33)
   workspace-add-app.ts         `workspace add-app` — onboarde une app (apps[] + apps/<nom>/{dev,prod} + rappel clasp clone) (E4)
   parc-overview.ts             `workspace overview` — vue parc d'un coup (F6) : apps × dev/prod, version lib, verdict env validate par app/env, couverture doc ; réutilise runEnvValidate

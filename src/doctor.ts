@@ -129,6 +129,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
 
   // 8. Vérifications par app (seulement si le manifeste maître décrit un parc).
   if (loaded.manifest && loaded.manifest.apps.length > 0) {
+    checks.push(checkLibraryDeclared(loaded.manifest));
     checks.push(checkClaspConfig(opts.cwd, loaded.manifest, fileExists, readText));
     checks.push(checkBaselines(opts.cwd, loaded.manifest, fileExists));
   }
@@ -249,6 +250,45 @@ function checkAdc(
     'info',
     'ADC absent — requis seulement par resolve-live / prod-truth / deploy-aware (API Apps Script)',
     'gcloud auth application-default login',
+  );
+}
+
+/**
+ * Bibliothèque mère déclarée (F-correctif B). Le pivot du modèle 2-axes V4 d'un
+ * parc multi-webapp est la `library` unique (script_id + prod_version figée). Si
+ * une app **expose** un `library_prefix` (donc le parc a un fournisseur de lib)
+ * mais que le manifeste ne déclare pas `library`, l'axe CODE
+ * (`env.library_version_mismatch`) reste **dormant** — c'est exactement ce qu'un
+ * agent oublie d'élicitéer. On le signale (warn) avec le fix_hint vers
+ * `onboard-app`. Faux positif quasi nul : on ne réveille que si un provider existe.
+ */
+function checkLibraryDeclared(manifest: WorkspaceManifest): DoctorCheck {
+  const providers = manifest.apps
+    .map((a) => a.library_prefix)
+    .filter((p): p is string => Boolean(p));
+  if (providers.length === 0) {
+    return mk(
+      'library',
+      'bibliothèque mère déclarée',
+      'info',
+      "aucune app n'expose de library_prefix — pas de bibliothèque partagée attendue",
+    );
+  }
+  if (!manifest.library) {
+    return mk(
+      'library',
+      'bibliothèque mère déclarée',
+      'warn',
+      `des apps exposent un library_prefix (${providers.join(', ')}) mais le manifeste ne déclare pas ` +
+        `\`library\` (script_id + prod_version) — l'axe env.library_version_mismatch est DORMANT`,
+      "déclarer library.{script_id, prod_version} dans gaslens.workspace.json (demander à l'utilisateur le scriptId de la lib partagée + sa version prod figée ; cf. skill onboard-app)",
+    );
+  }
+  return mk(
+    'library',
+    'bibliothèque mère déclarée',
+    'ok',
+    `library déclarée (prod figée v${manifest.library.prod_version})`,
   );
 }
 

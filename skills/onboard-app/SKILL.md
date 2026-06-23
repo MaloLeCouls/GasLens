@@ -14,9 +14,22 @@ deux projets `dev`/`prod`, déclarée dans le manifeste maître, indexée.
 - Si lib : préfixe d'exposition (`userSymbol`).
 - Ressources logiques utilisées (Sheets/Forms/dossiers) → noms logiques.
 - Existe-t-elle déjà côté Apps Script (script IDs) ou faut-il la créer ?
+- **Bibliothèque mère partagée du parc** (le pivot multi-webapp, V4 §26) : si le
+  parc a une lib partagée (consommée par plusieurs apps) et que `library` n'est
+  PAS encore renseignée dans `gaslens.workspace.json`, **demander à l'utilisateur**
+  son `script_id` et sa **version prod figée** (un entier — la dernière version
+  publiée de la lib) — puis renseigner le bloc `library` (cf. Scaffolding 0).
+  Sans ça, l'axe CODE (`env.library_version_mismatch`) reste **dormant** et
+  `gaslens doctor` le signale (`library: DORMANT`).
 
 ## Scaffolding
 
+0. **Bibliothèque mère** (une fois par parc, si absente) : écrire le bloc
+   `library` dans `gaslens.workspace.json` avec le `script_id` et le
+   `prod_version` (entier) recueillis à l'interview :
+   `"library": { "user_symbol": "<préfixe>", "script_id": "<id>", "prod_version": <n> }`.
+   `dev_version` reste `"HEAD"`. Vérifier ensuite avec `gaslens doctor` (le check
+   `library` doit passer de `DORMANT` à OK).
 1. **`gaslens workspace add-app <app> [--library-prefix <X>]`** — crée
    `apps/<app>/{dev,prod}`, ajoute l'entrée `apps[]` au manifeste maître (2
    projets) et un `CLAUDE.md` d'app. Imprime les prochaines étapes.
@@ -33,4 +46,6 @@ deux projets `dev`/`prod`, déclarée dans le manifeste maître, indexée.
 ## Suite
 
 Provisionner les ressources dev → skill `provision-env`. Puis coder via
-`gas-dev-loop`.
+`gas-dev-loop`. Pour vérifier l'état du parc après onboarding (apps × dev/prod,
+version de lib consommée, verdict `env validate`, couverture doc) :
+`gaslens workspace overview`.

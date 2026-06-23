@@ -204,6 +204,66 @@ describe('doctor — E3 (durcissement multi-repo)', () => {
     }
   });
 
+  it('library WARN quand une app expose un library_prefix mais le manifeste ne déclare pas library', async () => {
+    const masterProviderNoLib = JSON.stringify({
+      version: 1,
+      name: 'parc',
+      apps: [
+        {
+          name: 'core',
+          library_prefix: 'Core',
+          projects: {
+            dev: { script_id: 'CORE_DEV', clasp_path: 'apps/core/dev' },
+            prod: { script_id: 'CORE_PROD', clasp_path: 'apps/core/prod' },
+          },
+        },
+      ],
+      environments: { dev: { resources: {} }, prod: { resources: {} } },
+    });
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
+    try {
+      await writeFile(join(root, 'gaslens.workspace.json'), masterProviderNoLib, 'utf8');
+      await mkdir(join(root, '.claude'), { recursive: true });
+      await writeFile(join(root, '.claude', 'settings.json'), PLUGIN_SETTINGS, 'utf8');
+      const r = await runDoctor({ cwd: root, nodeVersion: '22.0.0', which: () => true, fileExists: () => true, home: root });
+      const lib = r.checks.find((c) => c.id === 'library');
+      expect(lib?.status).toBe('warn');
+      expect(lib?.detail).toContain('DORMANT');
+      expect(lib?.fix_hint).toContain('prod_version');
+      expect(r.ok).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('library OK quand library est déclarée ; INFO quand aucun provider', async () => {
+    const withLib = JSON.stringify({
+      version: 1,
+      name: 'parc',
+      apps: [{ name: 'core', library_prefix: 'Core', projects: {} }],
+      library: { user_symbol: 'Core', script_id: 'LIB_'.padEnd(40, 'X'), prod_version: 12 },
+      environments: { dev: { resources: {} }, prod: { resources: {} } },
+    });
+    const noProvider = JSON.stringify({
+      version: 1,
+      name: 'parc',
+      apps: [{ name: 'standalone', projects: {} }],
+      environments: { dev: { resources: {} }, prod: { resources: {} } },
+    });
+    for (const [manifest, expected] of [[withLib, 'ok'], [noProvider, 'info']] as const) {
+      const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
+      try {
+        await writeFile(join(root, 'gaslens.workspace.json'), manifest, 'utf8');
+        await mkdir(join(root, '.claude'), { recursive: true });
+        await writeFile(join(root, '.claude', 'settings.json'), PLUGIN_SETTINGS, 'utf8');
+        const r = await runDoctor({ cwd: root, nodeVersion: '22.0.0', which: () => true, fileExists: () => true, home: root });
+        expect(r.checks.find((c) => c.id === 'library')?.status).toBe(expected);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it('ADC INFO quand aucune credential par défaut n’est présente', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gaslens-doctor-'));
     try {

@@ -15,6 +15,12 @@ Tu n'as pas à re-vérifier ces points à la main.
 Deux environnements : `dev` (lib HEAD, ressources dev) et `prod` (lib figée,
 ressources prod). `gaslens env validate` garantit leur alignement.
 
+## S'orienter dans le parc
+
+`gaslens workspace overview` en un appel : apps × dev/prod, version de la
+bibliothèque mère consommée, verdict `env validate` par app/env, couverture doc.
+À lancer en début de session pour situer l'état du parc avant d'agir.
+
 ## Mémoire vivante
 
 <!-- Décisions durables, pièges, conventions locales du parc. -->

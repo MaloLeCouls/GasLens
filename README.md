@@ -105,7 +105,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens env validate [root]` | Deux axes d'environnement (V4) : `library_version_mismatch` (lib dev=HEAD/prod=figée) + `cross_env_leak` / `hardcoded_resource` / `undeclared_resource` (manifeste maître). Détecte les ids en dur via `openById`/`getFileById`/… **et `openByUrl`** |
 | `gaslens doc lint` | Fonctions sans intention (`doc.undocumented`) + `@param` en dérive (`doc.param_drift`) + `@returns` en dérive de la shape (`doc.return_drift`) + référence `{@link}`/`@see` périmée (`doc.stale_ref`). N'écrit jamais la prose |
 | `gaslens doc stub <fn>` | Squelette JSDoc à compléter (params détectés) |
-| `gaslens doctor [root]` | Checklist de prérequis auto-vérifiant (Node/clasp/plugin/manifeste). `--hook --quiet-when-ok` pour SessionStart |
+| `gaslens doctor [root]` | Checklist de prérequis auto-vérifiant (Node/clasp/plugin/manifeste, ADC, baselines, **bibliothèque mère déclarée**). `--hook --quiet-when-ok` pour SessionStart |
 | `gaslens workspace init <nom>` | Scaffold un workspace complet (manifeste maître, `.claude/settings.json`, `.mcp.json`, `apps/backlog/docs`) |
 | `gaslens workspace add-app <nom>` | Onboarde une app : entrée `apps[]` (2 projets dev/prod) + `apps/<nom>/{dev,prod}` + `CLAUDE.md` d'app + rappel `clasp clone` |
 | `gaslens workspace overview [root]` | **Vue parc d'un coup** : apps × dev/prod, version de la bibliothèque consommée, verdict `env validate` par app/env, couverture doc — orientation en un appel |

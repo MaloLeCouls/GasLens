@@ -1798,7 +1798,7 @@ const COMMANDS_OVERVIEW: CommandOverviewEntry[] = [
   { name: 'env validate [root]', tldr: 'axes d\'environnement : library_version_mismatch + cross_env_leak (manifeste maître)', reads_index: false, emits_findings: true },
   { name: 'doc lint', tldr: 'fonctions sans intention (undocumented) + @param en dérive (param_drift)', reads_index: true, emits_findings: true },
   { name: 'doc stub <fn>', tldr: 'squelette JSDoc à compléter (params détectés)', reads_index: true, emits_findings: false },
-  { name: 'doctor [root]', tldr: 'checklist prérequis auto-vérifiant (Node/clasp/plugin/manifeste) ; --hook --quiet-when-ok', reads_index: false, emits_findings: false },
+  { name: 'doctor [root]', tldr: 'checklist prérequis auto-vérifiant (Node/clasp/plugin/manifeste/lib mère) ; --hook --quiet-when-ok', reads_index: false, emits_findings: false },
   { name: 'workspace init <nom>', tldr: 'scaffold workspace (manifeste, .claude/settings, .mcp.json, apps/backlog/docs)', reads_index: false, emits_findings: false },
   { name: 'workspace add-app <nom>', tldr: 'onboarde une app (entrée manifeste + apps/<nom>/{dev,prod} + rappel clasp clone)', reads_index: false, emits_findings: false },
   { name: 'workspace overview [root]', tldr: 'vue parc d\'un coup : apps × dev/prod, version lib, verdict env validate, couverture doc', reads_index: false, emits_findings: false },

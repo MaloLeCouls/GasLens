@@ -22,12 +22,17 @@ deployment ID stable, c'est une **republication**, pas une reconfiguration.
 ## Procédure
 
 1. `clasp push` vers le **projet PROD**.
-2. `clasp version "<note de promotion>"` → nouvelle version figée.
+2. `clasp version "<note de promotion>"` → nouvelle version figée (numéro `<v>`).
 3. `clasp deploy --deploymentId <ID stable> --versionNumber <v>` :
    republie sur le **même** deployment ID → le `/exec` ne change pas d'URL.
-4. Vérifier que la lib prod pointe la **version figée** attendue
-   (`gaslens env validate --env prod`).
-5. Le **Google Site** sert automatiquement le nouveau `/exec` — aucune modif du
+4. **Si l'app promue est la bibliothèque mère** (ou si la promotion publie une
+   nouvelle version de la lib partagée) : **mettre à jour `library.prod_version`**
+   dans `gaslens.workspace.json` avec le nouveau `<v>`, et aligner la `version`
+   figée dans les `appsscript.json` des consommateurs prod. Sinon le manifeste se
+   périme et `env validate --env prod` criera à tort (ou l'agent oublie en silence).
+5. Vérifier que la lib prod pointe la **version figée** attendue
+   (`gaslens env validate --env prod` → CLEAN).
+6. Le **Google Site** sert automatiquement le nouveau `/exec` — aucune modif du
    Site nécessaire.
 
 ## Après
