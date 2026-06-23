@@ -58,9 +58,17 @@ export function buildWorkspaceFiles(opts: WorkspaceInitOptions): ScaffoldFile[] 
   }
 
   // Arborescence (placeholders : git ne suit pas les dossiers vides).
-  for (const dir of ['apps', 'backlog/inbox', 'backlog/triaged', 'backlog/archive', 'docs']) {
+  for (const dir of ['apps', 'backlog/inbox', 'backlog/triaged', 'backlog/archive']) {
     files.push({ path: `${dir}/.gitkeep`, content: '' });
   }
+
+  // Setup complet (G6) : wrappers, CI template, docs chargées à la demande.
+  files.push({ path: 'scripts/push-dev.sh', content: pushDevScript() });
+  files.push({ path: 'scripts/deploy-prod.sh', content: deployProdScript() });
+  files.push({ path: 'scripts/run-tests.sh', content: runTestsScript() });
+  files.push({ path: '.github/workflows/gas-ci.yml', content: gasCiTemplate() });
+  files.push({ path: 'docs/deploy.md', content: deployDoc() });
+  files.push({ path: 'docs/scopes.md', content: scopesDoc() });
 
   return files;
 }
@@ -223,4 +231,128 @@ function mcpJson(): string {
       2,
     ) + '\n'
   );
+}
+
+// ── Setup complet (G6) — wrappers d'API claire (fonctions de forçage §7.1) ──
+
+function pushDevScript(): string {
+  return `#!/usr/bin/env bash
+# push vers le projet DEV d'une app (jamais prod). Source de vérité = ce repo.
+# Usage : scripts/push-dev.sh <app>
+set -euo pipefail
+app="\${1:?usage: push-dev.sh <app>}"
+dir="apps/\${app}/dev"
+[ -f "\${dir}/.clasp.json" ] || { echo "pas de \${dir}/.clasp.json — 'clasp clone' d'abord"; exit 1; }
+( cd "\${dir}" && clasp status && clasp push )
+`;
+}
+
+function deployProdScript(): string {
+  return `#!/usr/bin/env bash
+# Promotion PROD (sous gate humain) : valide → push → version → redeploy SUR LE
+# MÊME deploymentId (URL /exec inchangée → le Google Site reste intact, cf.
+# docs/deploy.md). NE crée JAMAIS un "New deployment".
+# Usage : scripts/deploy-prod.sh <app> <deploymentId> [note]
+set -euo pipefail
+app="\${1:?usage: deploy-prod.sh <app> <deploymentId> [note]}"
+deploymentId="\${2:?deploymentId stable requis (Manage deployments)}"
+note="\${3:-promotion}"
+dir="apps/\${app}/prod"
+gaslens env validate "\${dir}" --format text || { echo "env validate non CLEAN — corrige avant prod"; exit 1; }
+( cd "\${dir}" && clasp push )
+ver="$( cd "\${dir}" && clasp version "\${note}" | grep -oE '[0-9]+' | tail -1 )"
+( cd "\${dir}" && clasp deploy --deploymentId "\${deploymentId}" --versionNumber "\${ver}" )
+echo "→ déployé version \${ver} sur \${deploymentId} (URL /exec inchangée)."
+echo "→ pense à bumper library.prod_version si c'est la lib mère."
+`;
+}
+
+function runTestsScript(): string {
+  return `#!/usr/bin/env bash
+# Lance les tests de contrat de l'API publique de la lib (le filet n°1, §6.2).
+# Émets le harnais avec : gaslens emit-contract-tests --runner gas-fakes
+# (exécutable LOCALEMENT, sans déploiement). Puis pointe ce script dessus.
+set -euo pipefail
+echo "adapter : node <harnais gas-fakes émis par gaslens emit-contract-tests>"
+`;
+}
+
+function gasCiTemplate(): string {
+  return `# CI du parc GAS (gabarit G6 — à compléter avec tes secrets clasp).
+# Bloque le merge si les tests de contrat distants échouent (état de l'art §6.3).
+# Secrets requis : CLASPRC_JSON (~/.clasprc.json), CLASP_JSON_DEV (.clasp.json dev).
+name: gas-ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm i -g @malolecouls/gaslens @google/clasp
+      # Analyse statique anti-régression (rapide, sans réseau).
+      - run: gaslens scan . && gaslens env validate --format text
+      # --- À DÉCOMMENTER une fois les secrets configurés ---
+      # - run: echo "\${{ secrets.CLASPRC_JSON }}" > ~/.clasprc.json
+      # - run: echo "\${{ secrets.CLASP_JSON_DEV }}" > apps/<app>/dev/.clasp.json
+      # - run: ( cd apps/<app>/dev && clasp push --force )
+      # - run: node scripts/remote-run-tests.mjs   # scripts.run → exit ≠ 0 si échec
+`;
+}
+
+function deployDoc(): string {
+  return `# Déploiement & stabilité d'URL (chargé à la demande)
+
+> Pointeur depuis le CLAUDE.md — pas d'@-import (coûte des tokens à chaque run).
+
+## Version ≠ Déploiement (à ne jamais confondre)
+
+- **Version** = snapshot immuable du code (point de sauvegarde). Une fois créée,
+  ne change plus.
+- **Déploiement** = une release qui rend une version servie, avec son URL/ID.
+- **Éditer/\`clasp push\` ne change RIEN pour les utilisateurs du \`/exec\`** : il faut
+  créer une nouvelle version ET re-pointer le déploiement existant dessus.
+
+## \`/dev\` vs \`/exec\`
+
+- \`/dev\` = toujours le dernier code sauvegardé (HEAD), éditeurs seulement → test.
+- \`/exec\` = la version DÉPLOYÉE → ce que le Google Site embarque, ce que voient les
+  visiteurs.
+- ⚠️ Remplacer \`/dev\` par \`/exec\` à la main dans une URL **ne marche pas** (ids
+  différents) — source classique d'iframe cassée.
+
+## Préserver l'URL (sinon le Site casse)
+
+« New deployment » crée un NOUVEL id/URL. Pour garder l'URL :
+**Manage deployments → éditer le déploiement existant → pointer la nouvelle
+version** (CLI : \`clasp deploy --deploymentId <id existant>\`). C'est ce que fait
+\`scripts/deploy-prod.sh\`. Casser l'URL = casser toutes les pages qui l'embarquent.
+`;
+}
+
+function scopesDoc(): string {
+  return `# Scopes OAuth & propagation par la bibliothèque (chargé à la demande)
+
+## Auto-détection vs oauthScopes explicite
+
+- Par défaut, Apps Script **détecte automatiquement** les scopes en scannant le
+  code — y compris ceux requis par la **bibliothèque** consommée.
+- Dès qu'une webapp déclare un \`oauthScopes\` **explicite** dans son manifeste,
+  l'auto-détection est **désactivée**. Si un scope utilisé par la lib manque,
+  **la lib casse chez ce consommateur**.
+- Retirer \`oauthScopes\` rétablit l'auto-détection.
+
+## Implication cross-projet (l'angle mort)
+
+Toute modif de l'API de la lib qui introduit un **nouveau service Google** (ex: la
+lib se met à appeler Gmail) peut exiger d'ajouter le scope correspondant dans
+**chaque** webapp à \`oauthScopes\` explicite. Invisible à la lecture d'un seul
+projet → **\`gaslens env validate\` le détecte** (\`env.library_scope_missing\`).
+`;
 }

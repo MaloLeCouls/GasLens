@@ -20,7 +20,13 @@ describe('workspace init — génération (pure)', () => {
     expect(paths).toContain('backlog/inbox/.gitkeep');
     expect(paths).toContain('backlog/triaged/.gitkeep');
     expect(paths).toContain('backlog/archive/.gitkeep');
-    expect(paths).toContain('docs/.gitkeep');
+    // Setup complet (G6) : scripts/, CI template, docs chargées à la demande.
+    expect(paths).toContain('scripts/push-dev.sh');
+    expect(paths).toContain('scripts/deploy-prod.sh');
+    expect(paths).toContain('scripts/run-tests.sh');
+    expect(paths).toContain('.github/workflows/gas-ci.yml');
+    expect(paths).toContain('docs/deploy.md');
+    expect(paths).toContain('docs/scopes.md');
   });
 
   it('le manifeste maître généré est valide et nommé', () => {

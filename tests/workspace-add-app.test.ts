@@ -21,6 +21,9 @@ describe('workspace add-app — plan (pur)', () => {
     expect(app.projects.prod?.clasp_path).toBe('apps/dash/prod');
     expect(app.projects.dev?.script_id).toBeUndefined(); // renseigné après clone
     expect(plan.files.map((f) => f.path)).toContain('apps/dash/CLAUDE.md');
+    // .claspignore par projet (G6) : ne pousser que le code GAS.
+    expect(plan.files.map((f) => f.path)).toContain('apps/dash/dev/.claspignore');
+    expect(plan.files.map((f) => f.path)).toContain('apps/dash/prod/.claspignore');
   });
 
   it('porte le library_prefix quand fourni', () => {

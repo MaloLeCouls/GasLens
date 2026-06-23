@@ -28,6 +28,21 @@ son deployment ID stable. Documenter ici la correspondance page ↔ déploiement
 Promouvoir = republier sur le **même** deployment ID (skill `promote-deploy`) →
 le Site sert la nouvelle version sans aucune modification ; l'URL ne change pas.
 
+### Pièges Sites / web app embarquée (à connaître — détails : `docs/deploy.md`)
+
+- **`/dev` ≠ `/exec`** : `/dev` = HEAD (éditeurs, test) ; `/exec` = version déployée
+  (ce que le Site embarque). Remplacer l'un par l'autre à la main dans une URL **ne
+  marche pas** (ids distincts). `gaslens workspace overview --format registry` tient
+  les deux à jour.
+- **Embed iframe** : un `doGet` qui renvoie du HTML doit poser
+  `.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)`, sinon le Site
+  refuse l'affichage (« Refused to frame ») — `gaslens lint-webapp` le signale
+  (`webapp.xframe_missing`).
+- **Hauteur d'iframe** : l'iframe Sites **ne se redimensionne pas** automatiquement
+  → communiquer la hauteur au parent via `postMessage` si nécessaire.
+- **History API** : `google.script.history` est **déconseillée** dans une web app
+  embarquée dans Sites (comportement non garanti).
+
 ### Faits volatils côté client (ne pas les mettre en commentaire — V4 §25)
 
 La signature et la shape de retour des fonctions `google.script.run` sont

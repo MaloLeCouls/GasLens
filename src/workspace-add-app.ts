@@ -51,6 +51,9 @@ export function planAddApp(
   const files: ScaffoldFile[] = [
     { path: `${base}/dev/.gitkeep`, content: '' },
     { path: `${base}/prod/.gitkeep`, content: '' },
+    // .claspignore par projet (G6) : ne pousser QUE le code GAS au push clasp.
+    { path: `${base}/dev/.claspignore`, content: claspignore() },
+    { path: `${base}/prod/.claspignore`, content: claspignore() },
     { path: `${base}/CLAUDE.md`, content: appClaudeMd(opts.name, opts.libraryPrefix) },
   ];
   return { manifest, files };
@@ -99,6 +102,22 @@ export async function runAddApp(root: string, opts: AddAppOptions): Promise<AddA
       `gaslens env validate apps/${opts.name}/prod   (doit être CLEAN)`,
     ],
   };
+}
+
+/** `.claspignore` (G6) : clasp ne pousse que le code GAS du projet. */
+function claspignore(): string {
+  return `# Ne pousser que le code GAS (appsscript.json + .gs/.html).
+**/**
+!appsscript.json
+!*.gs
+!*.html
+!*.js
+# Outillage local jamais poussé au projet GAS :
+.gaslens/**
+.clasp.json
+.claspignore
+node_modules/**
+`;
 }
 
 function appClaudeMd(name: string, libraryPrefix?: string): string {
