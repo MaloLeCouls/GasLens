@@ -45,7 +45,11 @@ import {
   gitInitAndCommit,
 } from './workspace-init.js';
 import { runAddApp } from './workspace-add-app.js';
-import { buildParcOverview, renderParcOverviewText } from './parc-overview.js';
+import {
+  buildParcOverview,
+  renderParcOverviewText,
+  renderRegistryText,
+} from './parc-overview.js';
 import {
   addEvolutionRequest,
   listEvolutionRequests,
@@ -1681,12 +1685,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .argument('[root]', 'Racine du workspace (on remonte au manifeste maître)', '.')
     .option('--no-scan', 'Sauter le scan (pas de couverture doc / compte de fonctions) — plus rapide')
-    .option('--format <fmt>', 'json | text', 'text')
+    .option('--format <fmt>', 'json | text | registry (REGISTRY.md généré — plan de masse)', 'text')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
     .action(async (root: string, opts: ParcOverviewCliOpts) => {
       const report = await buildParcOverview({ root: resolve(root), noScan: !opts.scan });
       if (opts.format === 'json') {
         process.stdout.write(jsonOut(report, opts.compact) + '\n');
+      } else if (opts.format === 'registry') {
+        process.stdout.write(renderRegistryText(report));
       } else {
         process.stdout.write(renderParcOverviewText(report) + '\n');
       }

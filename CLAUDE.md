@@ -90,7 +90,7 @@ src/
   doctor.ts                    `doctor` — prérequis (Node≥22, clasp, ADC, clasp-config↔manifeste, baselines par app, plugin, bibliothèque mère déclarée) ; SessionStart (V5 §34, E3, F-corr B)
   workspace-init.ts            `workspace init` — scaffolder (manifeste, .claude/settings.json, .mcp.json, apps/backlog/docs) (V5 §33)
   workspace-add-app.ts         `workspace add-app` — onboarde une app (apps[] + apps/<nom>/{dev,prod} + rappel clasp clone) (E4)
-  parc-overview.ts             `workspace overview` — vue parc d'un coup (F6) : apps × dev/prod, version lib, verdict env validate par app/env, couverture doc ; réutilise runEnvValidate
+  parc-overview.ts             `workspace overview` — vue parc d'un coup (F6) : apps × dev/prod, version lib, verdict env validate par app/env, couverture doc ; `--format registry` = plan de masse REGISTRY.md (G4 : gcp_project_id/exec_url/dev_url/container_id/description/site_embeds) ; réutilise runEnvValidate
   evolution-requests.ts        `request add`/`request list` — canal d'auto-évolution (G0) : l'agent logue ses manques récurrents (.gaslens/evolution-requests.jsonl), dédup par fréquence
 .claude-plugin/ skills/ commands/ hooks/ templates/ .mcp.json   FACE PLUGIN Claude Code (V5 §32) — installable via /plugin
 scripts/bench-scale.mjs        bench à l'échelle (F3) — parc synthétique, chronométre full/incrémental/env validate/overview (`npm run bench:scale`)

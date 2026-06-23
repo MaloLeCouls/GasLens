@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildParcOverview, renderParcOverviewText } from '../src/parc-overview.js';
+import {
+  buildParcOverview,
+  renderParcOverviewText,
+  renderRegistryText,
+} from '../src/parc-overview.js';
 
 const LIB_ID = 'LIB_SCRIPT_ID_0000000000000000000000000';
 const SHEET_DEV = 'SHEET_DEV_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -137,6 +141,51 @@ describe('workspace overview (F6)', () => {
       expect(dev.present).toBe(false);
       expect(dev.functions).toBeNull();
       expect(renderParcOverviewText(r)).toContain('non cloné');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('registre (G4) : expose le plan de masse enrichi', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gaslens-parc-'));
+    const enriched = JSON.stringify({
+      version: 1,
+      name: 'parc',
+      apps: [
+        {
+          name: 'dashboard',
+          description: 'Tableau de bord commercial',
+          library_prefix: 'Core',
+          site_embeds: ['https://sites.google.com/view/x/accueil'],
+          projects: {
+            prod: {
+              script_id: 'DASH_PROD',
+              clasp_path: 'apps/dashboard/prod',
+              gcp_project_id: 'gcp-dash-123',
+              exec_url: 'https://script.google.com/.../exec',
+              container_id: 'DRIVE_FILE_ID_XYZ',
+            },
+          },
+        },
+      ],
+      library: { user_symbol: 'Core', script_id: LIB_ID, prod_version: 12 },
+      environments: { dev: { resources: {} }, prod: { resources: {} } },
+    });
+    await writeFile(join(root, 'gaslens.workspace.json'), enriched, 'utf8');
+    try {
+      const r = await buildParcOverview({ root, noScan: true });
+      const app = r.apps[0]!;
+      expect(app.description).toBe('Tableau de bord commercial');
+      expect(app.site_embeds).toEqual(['https://sites.google.com/view/x/accueil']);
+      const prod = app.envs.find((e) => e.env === 'prod')!;
+      expect(prod.gcp_project_id).toBe('gcp-dash-123');
+      expect(prod.exec_url).toContain('/exec');
+      expect(prod.container_id).toBe('DRIVE_FILE_ID_XYZ');
+      const reg = renderRegistryText(r);
+      expect(reg).toContain('Plan de masse');
+      expect(reg).toContain('gcp-dash-123');
+      expect(reg).toContain('Tableau de bord commercial');
+      expect(reg).toContain('embarquée dans Site');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

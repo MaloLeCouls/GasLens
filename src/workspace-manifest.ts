@@ -35,6 +35,15 @@ export const ProjectRefSchema = z.object({
   clasp_path: z.string().optional(),
   /** deployment ID stable (prod surtout — promote = republier sur le même). */
   deployment_id: z.string().optional(),
+  // ── Plan de masse enrichi (G4) — IDs/URLs non déductibles du code ──
+  /** Projet Google Cloud associé (≠ scriptId ; requis pour Cloud Logging / services avancés). */
+  gcp_project_id: z.string().optional(),
+  /** URL `/exec` (version DÉPLOYÉE — ce que le Google Site embarque). */
+  exec_url: z.string().optional(),
+  /** URL `/dev` (HEAD, éditeurs seulement — test). */
+  dev_url: z.string().optional(),
+  /** ID du fichier Drive parent si le script est *container-bound* (Doc/Sheet/Form). */
+  container_id: z.string().optional(),
 });
 export type ProjectRef = z.infer<typeof ProjectRefSchema>;
 
@@ -47,6 +56,14 @@ export const AppSchema = z.object({
   name: z.string().min(1),
   /** Préfixe d'exposition si cette app est consommée comme librairie. */
   library_prefix: z.string().optional(),
+  /** Rôle métier en une ligne — l'agent sait quelle webapp fait quoi sans tout lire (G4). */
+  description: z.string().optional(),
+  /**
+   * Où le `/exec` de cette app est embarqué dans un Google Site (page / note).
+   * Quand non vide, on SAIT que la web app est embarquée → `webapp.xframe_missing`
+   * est élevé de info à warn pour cette app (G4 ↔ G2).
+   */
+  site_embeds: z.array(z.string()).optional(),
   projects: z
     .object({
       dev: ProjectRefSchema.optional(),

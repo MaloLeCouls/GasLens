@@ -108,7 +108,7 @@ Exit codes : `0` CLEAN · `3` BREAK · `4` WARN · `2` erreur d'outillage.
 | `gaslens doctor [root]` | Checklist de prérequis auto-vérifiant (Node/clasp/plugin/manifeste, ADC, baselines, **bibliothèque mère déclarée**). `--hook --quiet-when-ok` pour SessionStart |
 | `gaslens workspace init <nom>` | Scaffold un workspace complet (manifeste maître, `.claude/settings.json`, `.mcp.json`, `apps/backlog/docs`) |
 | `gaslens workspace add-app <nom>` | Onboarde une app : entrée `apps[]` (2 projets dev/prod) + `apps/<nom>/{dev,prod}` + `CLAUDE.md` d'app + rappel `clasp clone` |
-| `gaslens workspace overview [root]` | **Vue parc d'un coup** : apps × dev/prod, version de la bibliothèque consommée, verdict `env validate` par app/env, couverture doc — orientation en un appel |
+| `gaslens workspace overview [root]` | **Vue parc d'un coup** : apps × dev/prod, version de la bibliothèque consommée, verdict `env validate` par app/env, couverture doc — orientation en un appel. `--format registry` génère le **plan de masse** (REGISTRY.md : scriptId/projectId GCP/URLs `/exec`+`/dev`/id Drive/embeds Site) |
 | `gaslens request add <need>` | **Canal d'auto-évolution** : l'agent logue un manque récurrent de l'outil (dédup par fréquence). `gaslens request list` pour les revoir et prioriser |
 | `gaslens manifest` | Croise code ↔ `appsscript.json` : libs/scopes/services avancés/`urlFetchWhitelist` |
 | `gaslens validate-api` | Méthodes GAS hallucinées + arity manquante + méthodes dépréciées |

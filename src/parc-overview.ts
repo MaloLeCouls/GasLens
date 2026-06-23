@@ -29,6 +29,11 @@ export interface ParcEnvRow {
   env: string;
   clasp_path: string | null;
   script_id: string | null;
+  /** Plan de masse enrichi (G4). */
+  gcp_project_id: string | null;
+  exec_url: string | null;
+  dev_url: string | null;
+  container_id: string | null;
   /** Le dossier projet existe-t-il sur le disque ? */
   present: boolean;
   /** Version de la bibliothèque mère consommée (`HEAD`, un numéro, ou null). */
@@ -45,6 +50,8 @@ export interface ParcEnvRow {
 export interface ParcAppRow {
   name: string;
   library_prefix: string | null;
+  description: string | null;
+  site_embeds: string[];
   envs: ParcEnvRow[];
 }
 
@@ -119,6 +126,10 @@ export async function buildParcOverview(
         env: envName,
         clasp_path: claspPath,
         script_id: ref?.script_id ?? null,
+        gcp_project_id: ref?.gcp_project_id ?? null,
+        exec_url: ref?.exec_url ?? null,
+        dev_url: ref?.dev_url ?? null,
+        container_id: ref?.container_id ?? null,
         present,
         lib_version: libVersion,
         lib_mode: libMode,
@@ -127,7 +138,13 @@ export async function buildParcOverview(
         env_verdict: verdictOf(localFindings),
       });
     }
-    apps.push({ name: app.name, library_prefix: app.library_prefix ?? null, envs });
+    apps.push({
+      name: app.name,
+      library_prefix: app.library_prefix ?? null,
+      description: app.description ?? null,
+      site_embeds: app.site_embeds ?? [],
+      envs,
+    });
   }
 
   const report: ParcOverviewReport = {
@@ -266,4 +283,39 @@ export function renderParcOverviewText(report: ParcOverviewReport): string {
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * Rend le **plan de masse** (G4) — un REGISTRY.md généré : tout l'inventaire
+ * canonique non déductible du code (scriptId, projectId GCP, URLs /exec & /dev,
+ * id Drive container-bound, embeds Site). Pensé pour être collé/commité comme
+ * référence d'orientation.
+ */
+export function renderRegistryText(report: ParcOverviewReport): string {
+  if (!report.manifest_present) return `# Registre — ${report.summary}`;
+  const lines: string[] = [`# Plan de masse — ${report.workspace_root}`, ''];
+  if (report.library) {
+    lines.push(
+      `**Bibliothèque mère** : ${report.library.user_symbol ?? '(sans symbol)'} · scriptId \`${report.library.script_id}\` · prod figée v${report.library.prod_version}`,
+      '',
+    );
+  }
+  for (const app of report.apps) {
+    lines.push(`## ${app.name}${app.description ? ` — ${app.description}` : ''}`);
+    if (app.library_prefix) lines.push(`- exposée comme librairie : \`${app.library_prefix}\``);
+    if (app.site_embeds.length) lines.push(`- embarquée dans Site : ${app.site_embeds.join(' ; ')}`);
+    for (const e of app.envs) {
+      const bits: string[] = [];
+      if (e.script_id) bits.push(`scriptId=\`${e.script_id}\``);
+      if (e.gcp_project_id) bits.push(`gcp=\`${e.gcp_project_id}\``);
+      if (e.exec_url) bits.push(`/exec=${e.exec_url}`);
+      if (e.dev_url) bits.push(`/dev=${e.dev_url}`);
+      if (e.container_id) bits.push(`container=\`${e.container_id}\``);
+      if (e.lib_mode !== 'none') bits.push(`lib=${e.lib_version}`);
+      if (!e.present) bits.push('(non cloné)');
+      lines.push(`- **${e.env}** : ${bits.length ? bits.join(' · ') : '(rien de déclaré)'}`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd() + '\n';
 }
