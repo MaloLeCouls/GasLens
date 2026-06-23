@@ -54,6 +54,7 @@ import {
 } from './extract/handler-shapes.js';
 import { extractGasPatterns } from './extract/gas-patterns.js';
 import { analyzeReturns } from './extract/return-analysis.js';
+import { analyzeWebappHtml } from './extract/webapp-html.js';
 import { analyzeUncertainty } from './extract/uncertainty.js';
 import type {
   FieldRead,
@@ -386,6 +387,7 @@ export async function scanProject(opts: ScanOptions): Promise<ProjectIndex> {
       if (!rec) continue; // collision : sauté en pass 1
       rec.patterns = extractGasPatterns(def.bodyNode, b.fileRel);
       rec.return_analysis = analyzeReturns(def.bodyNode, b.fileRel);
+      rec.webapp_html = analyzeWebappHtml(def.bodyNode);
       // Couverture : sources d'incertitude statique (dispatch dynamique, eval...).
       const uncertaintyNotes = analyzeUncertainty(def.bodyNode, b.fileRel);
       if (uncertaintyNotes.length > 0) {

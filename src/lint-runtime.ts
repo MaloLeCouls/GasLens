@@ -6,7 +6,11 @@ export type LintRuleKind =
   | 'quota.value_in_loop'
   | 'urlfetch.in_loop'
   | 'lock.no_finally'
-  | 'trigger.orphan';
+  | 'trigger.orphan'
+  | 'perf.library_chatty_ui';
+
+/** Seuil de call sites google.script.run au-delà duquel le coût de démarrage de la lib pèse (G5). */
+const CHATTY_UI_THRESHOLD = 3;
 
 export interface LintRuntimeEntry {
   kind: LintRuleKind;
@@ -107,6 +111,36 @@ export function lintRuntime(index: ProjectIndex): LintRuntimeReport {
     }
   }
 
+  // perf.library_chatty_ui (G5) — INFO niveau projet : une bibliothèque GAS
+  // côté serveur alourdit le démarrage du script, surcoût SENSIBLE dans les UI
+  // HTML Service qui enchaînent de courts google.script.run (best-practices
+  // Google). Heuristique consultative, jamais bloquante.
+  const libDeps = index.manifest.libraries.length;
+  if (libDeps > 0) {
+    const gsrSites = index.functions.flatMap((fn) =>
+      fn.exposures.filter((e) => e.type === 'client_call'),
+    );
+    if (gsrSites.length >= CHATTY_UI_THRESHOLD) {
+      const at = gsrSites[0]!;
+      entries.push({
+        kind: 'perf.library_chatty_ui',
+        severity: 'info',
+        confidence: 'low',
+        function: '<projet>',
+        file: at.file,
+        line: at.line,
+        reason:
+          `le projet consomme ${libDeps} bibliothèque(s) GAS ET expose ${gsrSites.length} call sites ` +
+          `google.script.run — une lib côté serveur alourdit le démarrage, surcoût sensible dans les UI ` +
+          `qui enchaînent de courts appels (best-practices Google)`,
+        fix_hint:
+          `arbitrer : soit déporter la logique chaude hors de la lib (coquille webapp minimale), ` +
+          `soit regrouper les google.script.run en un appel batch, soit accepter le surcoût si le ` +
+          `volume d'appels reste faible`,
+      });
+    }
+  }
+
   const findings = entries
     .filter((e) => e.severity !== 'info')
     .map((e) => toFinding(e, index.project));
@@ -157,7 +191,8 @@ function consumerKindFor(
   | 'lint.quota_in_loop'
   | 'lint.urlfetch_in_loop'
   | 'lint.lock_no_finally'
-  | 'lint.trigger_orphan' {
+  | 'lint.trigger_orphan'
+  | 'lint.library_chatty_ui' {
   switch (kind) {
     case 'quota.value_in_loop':
       return 'lint.quota_in_loop';
@@ -167,6 +202,8 @@ function consumerKindFor(
       return 'lint.lock_no_finally';
     case 'trigger.orphan':
       return 'lint.trigger_orphan';
+    case 'perf.library_chatty_ui':
+      return 'lint.library_chatty_ui';
   }
 }
 

@@ -249,6 +249,69 @@ describe('lint-runtime — trigger.orphan', () => {
   });
 });
 
+describe('lint-runtime — perf.library_chatty_ui (G5)', () => {
+  const LIB_MANIFEST = JSON.stringify({
+    runtimeVersion: 'V8',
+    dependencies: {
+      libraries: [{ userSymbol: 'Core', libraryId: 'LIB_ID_000000000000000000000000', version: '12' }],
+    },
+  });
+
+  it('INFO quand une lib est consommée ET ≥3 call sites google.script.run', async () => {
+    const root = await makeProject({
+      'appsscript.json': LIB_MANIFEST,
+      'main.gs': `function a() { return 1; } function b() { return 2; } function c() { return 3; }`,
+      'index.html': `<html><body><script>
+        google.script.run.a();
+        google.script.run.b();
+        google.script.run.c();
+      </script></body></html>`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintRuntime(idx);
+      const e = report.entries.find((x) => x.kind === 'perf.library_chatty_ui');
+      expect(e?.severity).toBe('info');
+      expect(e?.reason).toContain('google.script.run');
+      // INFO : pas dans les findings gatables ni dans le verdict.
+      expect(report.verdict).toBe('CLEAN');
+      expect(report.findings.some((f) => f.consumer_kind === 'lint.library_chatty_ui')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('silencieux sans bibliothèque déclarée', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST, // pas de lib
+      'main.gs': `function a() { return 1; } function b() { return 2; } function c() { return 3; }`,
+      'index.html': `<html><body><script>
+        google.script.run.a(); google.script.run.b(); google.script.run.c();
+      </script></body></html>`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      expect(lintRuntime(idx).entries.some((x) => x.kind === 'perf.library_chatty_ui')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('silencieux sous le seuil (lib mais <3 google.script.run)', async () => {
+    const root = await makeProject({
+      'appsscript.json': LIB_MANIFEST,
+      'main.gs': `function a() { return 1; }`,
+      'index.html': `<html><body><script>google.script.run.a();</script></body></html>`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      expect(lintRuntime(idx).entries.some((x) => x.kind === 'perf.library_chatty_ui')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('lint-runtime — rendu texte', () => {
   it('inclut project, verdict, et une ligne par finding avec sa confidence', async () => {
     const root = await makeProject({

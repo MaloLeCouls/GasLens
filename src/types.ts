@@ -315,6 +315,19 @@ export interface FunctionPatterns {
   template_bindings: TemplateBinding[];
 }
 
+/**
+ * Signal HTML/web app intrinsèque à une fonction (G2) : renvoie-t-elle du HTML
+ * via HtmlService, et avec quel mode `setXFrameOptionsMode` ? Sert au lint
+ * `webapp.xframe_missing` (sans `ALLOWALL`, l'iframe d'un Google Site refuse de
+ * s'afficher). Intrinsèque au corps → préservé tel quel par le scan incrémental.
+ */
+export interface WebappHtmlSignal {
+  /** La fonction appelle `HtmlService.create{HtmlOutput,Template}*`. */
+  returns_html: boolean;
+  /** Mode trouvé via `setXFrameOptionsMode(...)`, ou null si jamais appelé. */
+  xframe_mode: 'ALLOWALL' | 'DEFAULT' | 'DENY' | null;
+}
+
 export interface FunctionRecord {
   id: string;
   name: string;
@@ -331,6 +344,8 @@ export interface FunctionRecord {
   inferred_contract: InferredContract | null;
   patterns: FunctionPatterns;
   return_analysis: ReturnAnalysis;
+  /** Signal HTML/web app (G2) — présent si la fonction a été analysée. */
+  webapp_html?: WebappHtmlSignal;
   coverage: Coverage;
 }
 

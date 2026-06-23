@@ -204,6 +204,82 @@ describe('lint-webapp — rendu texte', () => {
   });
 });
 
+describe('lint-webapp — xframe_missing (G2)', () => {
+  it('INFO quand doGet renvoie du HTML sans setXFrameOptionsMode', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function doGet() { return HtmlService.createHtmlOutput('<b>hi</b>'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintWebapp(idx);
+      const e = report.entries.find((x) => x.kind === 'webapp.xframe_missing');
+      expect(e).toBeDefined();
+      expect(e?.severity).toBe('info');
+      expect(report.verdict).toBe('CLEAN'); // info ne gate pas
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('aucun finding quand ALLOWALL est posé', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function doGet() { return HtmlService.createHtmlOutput('x').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintWebapp(idx);
+      expect(report.entries.some((x) => x.kind === 'webapp.xframe_missing')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('INFO quand le mode est DENY (≠ ALLOWALL)', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function doGet() { return HtmlService.createHtmlOutput('x').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DENY); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const e = lintWebapp(idx).entries.find((x) => x.kind === 'webapp.xframe_missing');
+      expect(e?.reason).toContain('DENY');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ne flague pas une fonction non-entry qui renvoie du HTML', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function buildPage() { return HtmlService.createHtmlOutput('x'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      expect(lintWebapp(idx).entries.some((x) => x.kind === 'webapp.xframe_missing')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('élève en WARN quand embeddedInSite (registre G4)', async () => {
+    const root = await makeProject({
+      'appsscript.json': MANIFEST,
+      'main.gs': `function doGet() { return HtmlService.createHtmlOutput('<b>hi</b>'); }`,
+    });
+    try {
+      const idx = await scanProject({ root });
+      const report = lintWebapp(idx, { embeddedInSite: true });
+      const e = report.entries.find((x) => x.kind === 'webapp.xframe_missing');
+      expect(e?.severity).toBe('warn');
+      expect(report.verdict).toBe('WARN');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('lint-webapp — projet sans HTML', () => {
   it('CLEAN quand le projet ne sert aucun HTML', async () => {
     const root = await makeProject({

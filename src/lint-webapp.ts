@@ -5,16 +5,26 @@ import type { HtmlWebappFileSignals, ProjectIndex } from './types.js';
 export type WebappRuleKind =
   | 'webapp.mixed_content'
   | 'webapp.link_target'
-  | 'webapp.form_submit';
+  | 'webapp.form_submit'
+  | 'webapp.xframe_missing';
 
 export interface LintWebappEntry {
   kind: WebappRuleKind;
-  severity: 'warn';
+  severity: 'warn' | 'info';
   confidence: 'high' | 'medium';
   file: string;
   line: number;
   reason: string;
   fix_hint: string;
+}
+
+export interface LintWebappOptions {
+  /**
+   * Noms d'apps/projets dont la web app est déclarée **embarquée dans un Google
+   * Site** (registre G4). Pour ces projets, `webapp.xframe_missing` est élevé de
+   * `info` à `warn` (on SAIT alors que l'absence d'ALLOWALL casse l'embed).
+   */
+  embeddedInSite?: boolean;
 }
 
 export interface LintWebappReport {
@@ -31,7 +41,7 @@ export interface LintWebappReport {
  * (gas-fakes serve n'applique pas les restrictions iframe). Toujours
  * WARN, jamais BREAK.
  */
-export function lintWebapp(index: ProjectIndex): LintWebappReport {
+export function lintWebapp(index: ProjectIndex, opts: LintWebappOptions = {}): LintWebappReport {
   const entries: LintWebappEntry[] = [];
 
   for (const file of index.html_webapp_signals) {
@@ -39,6 +49,8 @@ export function lintWebapp(index: ProjectIndex): LintWebappReport {
     entries.push(...linkTargetEntries(file));
     entries.push(...formSubmitEntries(file));
   }
+  // xframe en dernier : ne déplace pas l'ordre des findings .html existants.
+  entries.push(...xframeEntries(index, opts));
 
   const findings = entries.map((e) => toFinding(e, index.project));
   const verdict = aggregateVerdict(
@@ -121,6 +133,43 @@ function formSubmitEntries(file: HtmlWebappFileSignals): LintWebappEntry[] {
   }));
 }
 
+/**
+ * `webapp.xframe_missing` (G2) — un doGet/doPost qui renvoie du HTML sans
+ * `setXFrameOptionsMode(ALLOWALL)` ne s'affichera pas embarqué dans un Google
+ * Site (« Refused to frame »). On ne peut pas savoir statiquement si la web app
+ * EST embarquée → sévérité **info** par défaut (consultatif, ne gate pas) ;
+ * élevée à **warn** si le registre déclare l'embed (`opts.embeddedInSite`).
+ */
+function xframeEntries(index: ProjectIndex, opts: LintWebappOptions): LintWebappEntry[] {
+  const out: LintWebappEntry[] = [];
+  const severity: 'warn' | 'info' = opts.embeddedInSite ? 'warn' : 'info';
+  for (const fn of index.functions) {
+    const wh = fn.webapp_html;
+    if (!wh || !wh.returns_html) continue;
+    if (!fn.exposures.some((e) => e.type === 'entry_point_web')) continue;
+    if (wh.xframe_mode === 'ALLOWALL') continue;
+    const never = wh.xframe_mode === null;
+    out.push({
+      kind: 'webapp.xframe_missing',
+      severity,
+      confidence: 'medium',
+      file: fn.definition.file,
+      line: fn.definition.line,
+      reason:
+        `'${fn.name}' renvoie du HTML (HtmlService) ` +
+        (never
+          ? `sans appeler setXFrameOptionsMode(...)`
+          : `avec setXFrameOptionsMode(${wh.xframe_mode}) (≠ ALLOWALL)`) +
+        ` — embarqué dans un Google Site, l'iframe sera refusée (« Refused to frame »)` +
+        (severity === 'info' ? ` [info : seulement bloquant si la web app est embarquée dans un Site]` : ''),
+      fix_hint:
+        `retourner HtmlService.create...().setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL) ` +
+        `pour autoriser l'affichage en iframe (requis par l'embed Google Sites)`,
+    });
+  }
+  return out;
+}
+
 function toFinding(entry: LintWebappEntry, project: string): Finding {
   return {
     severity: entry.severity,
@@ -146,7 +195,7 @@ export function renderLintWebappText(report: LintWebappReport): string {
   lines.push(`[${report.project}]  ${report.verdict}  ${report.summary}`);
   for (const e of report.entries) {
     lines.push(
-      `  WARN  ${e.kind}  @ ${e.file}:${e.line}  (confidence: ${e.confidence})`,
+      `  ${e.severity.toUpperCase()}  ${e.kind}  @ ${e.file}:${e.line}  (confidence: ${e.confidence})`,
     );
     lines.push(`        reason: ${e.reason}`);
     lines.push(`        fix:    ${e.fix_hint}`);
