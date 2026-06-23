@@ -145,7 +145,7 @@ Préférer **étendre** `check` (nouveau `consumer_kind`) plutôt qu'une command
 
 ## État courant & prochaines marches (V3, ROI décroissant)
 
-Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`, **`env validate`**, **`doc lint`/`doc stub`**, **`doctor`**, **`workspace init`/`workspace add-app`/`workspace overview`**.
+Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-webapp`, `resolve-live`, `prod-truth`, `deploy-aware`, `inspect`, `impact`, `diff`, `check`, `hook`, **`guard`**, `emit-dts`, `emit-contract-tests`, `commands`, `eval`, `init`, **`env validate`**, **`doc lint`/`doc stub`**, **`doctor`**, **`workspace init`/`workspace add-app`/`workspace overview`**, **`request add`/`request list`**.
 
 **V4 / V5 / multi-repo (LOTs A→E)** — voir `ROADMAP.md` :
 - **`env validate`** (V4 §29) : 2 axes d'environnement. `env.cross_env_leak` (BREAK, le finding-roi : id de ressource d'un autre env en dur), `env.library_version_mismatch` (prod en HEAD / mauvaise version figée), `env.hardcoded_resource` (id du bon env en dur, OU id non déclaré via openById/getFileById — E5), `env.undeclared_resource` (ressource déclarée dans un env mais pas un autre). Lit le manifeste maître ; intégré au pipeline `check`.
@@ -154,6 +154,7 @@ Implémenté : `scan`, `map`, `manifest`, `validate-api`, `lint-runtime`, `lint-
 - **Multi-repo (LOT E)** : `scanWorkspace` nomme les projets par **chemin relatif** (`apps/dash/dev`, plus de collision `dev`/`prod` — E1) et lit le manifeste maître pour résoudre les appels `Lib.fn()` inter-repos en `cross_project_edges` **env-aware** (E2, `loadLibraryProviders`). `--project` accepte un suffixe (`dash/dev`).
 - **Face plugin** (V5 §32) : `.claude-plugin/{plugin,marketplace}.json`, `skills/` (8, dont `request-evolution` G0), `commands/` (4), `hooks/hooks.json` (**PreToolUse(Bash)→guard** G3, PostToolUse→hook, SessionStart→doctor), `.mcp.json` (chrome-devtools épinglé `@1.3.0`), `templates/`. `package.json` → `@malolecouls/gaslens` (non publié).
 - **LOT F (durcissement post-merge)** : `workspace overview` (vue parc F6), `env validate` voit `openByUrl` (F5a), CI matricielle Win+Linux (F1), bench à l'échelle (F3, `npm run bench:scale`), test différentiel incrémental≡full (F2). **F2 a corrigé un vrai bug moteur** (cf. Pièges). Reste F5b (extracteur d'index, non urgent d'après le bench) et F9 (valider le plugin contre le vrai chargeur).
+- **LOT G (complétude « état de l'art agent×GAS »)** : `gaslens request` (auto-évolution G0), `env.library_scope_missing` (scopes OAuth cross-projet G1), `webapp.xframe_missing` (Sites G2), `gaslens guard` (garde-fou PreToolUse push-prod G3), registre enrichi + `overview --format registry` (G4), `perf.library_chatty_ui` (G5), scaffolding setup complet (scripts/CI/docs, G6), notes de doctrine Sites (G7). Confronté au doc `etat-de-lart-agent-ia-gas.md` : ~80 % déjà couvert, ce lot comble les 6 trous réels + le canal d'auto-évolution.
 
 **Ergonomie LLM (V3 §24 + extensions)** :
 - `commands` — quick reference compact (~250 tokens) que l'agent peut interroger pour découvrir la surface.

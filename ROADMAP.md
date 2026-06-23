@@ -216,6 +216,40 @@ suppression de la branche `feat/lot-a-v4-analyses`.
 
 ---
 
+## 🟫 LOT G — Complétude « état de l'art agent IA × GAS » (livré 2026-06-23)
+
+> Issu d'une confrontation au document `etat-de-lart-agent-ia-gas.md` (synthèse web du
+> dev GAS piloté par agent). ~80 % était déjà la raison d'être de GasLens ; ce lot comble
+> les 6 trous réels + ajoute le **canal d'auto-évolution**. Tout additif, statique, 490 tests.
+
+- [x] **G0 — `gaslens request` (auto-évolution)** : l'agent logue ses manques récurrents
+  (`request add`, dédup par fréquence dans `.gaslens/evolution-requests.jsonl`), `request list`
+  trie par occurrences. Skill `request-evolution` + note CLAUDE.md racine. `src/evolution-requests.ts`.
+- [x] **G1 — `env.library_scope_missing` (scopes OAuth cross-projet)** : l'angle mort §3.4 —
+  un consommateur à `oauthScopes` explicite à qui manque un scope requis par la lib qu'il consomme.
+  Scopes lib = explicites + services détectés dans sa source (`scopes.ts`). `env-validate.ts`.
+- [x] **G2 — `webapp.xframe_missing`** : doGet/doPost renvoyant du HTML sans
+  `setXFrameOptionsMode(ALLOWALL)` → iframe Site refusée. Signal intrinsèque `FunctionRecord.webapp_html`
+  (`extract/webapp-html.ts`). **INFO** par défaut, **WARN** si le registre déclare un embed Site (G4).
+- [x] **G3 — `gaslens guard` (garde-fou PreToolUse)** : bloque (exit 2 + deny) un `clasp push/deploy`
+  vers un projet **prod** dont `env validate` est BREAK. `src/guard.ts` + PreToolUse(Bash)→guard.
+- [x] **G4 — registre enrichi (plan de masse)** : manifeste étendu (`gcp_project_id`, `exec_url`,
+  `dev_url`, `container_id`, `description`, `site_embeds`) + `workspace overview --format registry`
+  (REGISTRY.md généré). `workspace-manifest.ts` + `parc-overview.ts`.
+- [x] **G5 — `perf.library_chatty_ui`** : INFO niveau projet — lib GAS consommée + ≥3 call sites
+  google.script.run (coût de démarrage UI, §3.3). `lint-runtime.ts`.
+- [x] **G6 — scaffolding setup complet** : `workspace init` émet `scripts/` (push-dev/deploy-prod/
+  run-tests), `.github/workflows/gas-ci.yml`, `docs/{deploy,scopes}.md` ; `.claspignore` par projet
+  via `add-app`. `workspace-init.ts` + `workspace-add-app.ts`.
+- [x] **G7 — notes de doctrine Sites/webapp** : /dev≠/exec, embed ALLOWALL, iframe non-redimensionnée
+  (postMessage), `google.script.history` en embed → `templates/claude-md/app.md`.
+
+**Restent (suites possibles)** : élever `webapp.xframe_missing` info→warn automatiquement dans
+`check` quand `site_embeds` est déclaré (l'option `lintWebapp({embeddedInSite})` existe + est testée ;
+wiring async dans le pipeline check à faire) ; tests de contrat distants réels en CI (gabarit fourni).
+
+---
+
 ### Chemin critique « démo jour-1 »
 Si la distribution prime : **C5 + C1 + B1 + B2** suffisent à `npm i -g` → `workspace init` →
 `/plugin install` → `doctor`.
