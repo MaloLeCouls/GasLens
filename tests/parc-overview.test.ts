@@ -1,12 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import {
   buildParcOverview,
   renderParcOverviewText,
   renderRegistryText,
 } from '../src/parc-overview.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const CLI_BIN = resolvePath(here, '..', 'bin', 'gaslens.js');
 
 const LIB_ID = 'LIB_SCRIPT_ID_0000000000000000000000000';
 const SHEET_DEV = 'SHEET_DEV_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -198,6 +203,59 @@ describe('workspace overview (F6)', () => {
       expect(r.manifest_present).toBe(false);
       expect(r.apps).toEqual([]);
       expect(renderParcOverviewText(r)).toContain('parc:');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('workspace overview --write', () => {
+  it('--write écrit le registry dans le fichier, stdout vide, message sur stderr', async () => {
+    const root = await makeWorkspace(CLEAN_DEV, CLEAN_PROD);
+    const out = join(root, 'REGISTRY.md');
+    try {
+      const res = spawnSync(
+        process.execPath,
+        [CLI_BIN, 'workspace', 'overview', root, '--format', 'registry', '--write', out],
+        { encoding: 'utf8' },
+      );
+      expect(res.status).toBe(0);
+      expect(res.stdout).toBe('');
+      expect(res.stderr).toMatch(/Wrote \d+ bytes to /);
+      const content = await readFile(out, 'utf8');
+      expect(content).toContain('Plan de masse');
+      expect(content.length).toBeGreaterThan(20);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('sans --write : comportement stdout préservé (régression)', async () => {
+    const root = await makeWorkspace(CLEAN_DEV, CLEAN_PROD);
+    try {
+      const res = spawnSync(
+        process.execPath,
+        [CLI_BIN, 'workspace', 'overview', root, '--format', 'registry'],
+        { encoding: 'utf8' },
+      );
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain('Plan de masse');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('--write échoue clairement si le dossier parent n\'existe pas', async () => {
+    const root = await makeWorkspace(CLEAN_DEV, CLEAN_PROD);
+    const out = join(root, 'does-not-exist', 'REGISTRY.md');
+    try {
+      const res = spawnSync(
+        process.execPath,
+        [CLI_BIN, 'workspace', 'overview', root, '--format', 'registry', '--write', out],
+        { encoding: 'utf8' },
+      );
+      expect(res.status).toBe(2);
+      expect(res.stderr).toContain('dossier parent introuvable');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

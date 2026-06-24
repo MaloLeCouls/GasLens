@@ -11,9 +11,9 @@
  * actionnables ; eux seuls cassent le silence de `--quiet-when-ok`.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, delimiter } from 'node:path';
+import { join, delimiter, relative } from 'node:path';
 import {
   loadWorkspaceManifest,
   type WorkspaceManifest,
@@ -53,6 +53,13 @@ export interface DoctorOptions {
   home?: string;
   /** Override des variables d'environnement pertinentes (test). */
   env?: Record<string, string | undefined>;
+  /** Active le check secrets (B2 §B). Opt-in : peut lire beaucoup de fichiers. */
+  secretsScan?: boolean;
+  /**
+   * Override du listing d'un dossier (test). Renvoie `null` si illisible.
+   * Utilisé par les checks A (hooks) et B (secrets) pour rester déterministes en test.
+   */
+  readDir?: (path: string) => string[] | null;
 }
 
 const MIN_NODE_MAJOR = 22;
@@ -122,6 +129,12 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
   // 6. plugin gaslens réellement déclaré (pas juste le fichier présent).
   checks.push(checkPluginEnabled(opts.cwd, fileExists, readText));
 
+  // 6bis. Invariant L1 (V5) : le chemin chaud (hooks PreToolUse/PostToolUse/
+  // Stop/SubagentStop) doit rester statique-local-instant. On bloque les
+  // configs qui pousseraient un effort « ultracode » / « xhigh » dans ce
+  // chemin — c'est une violation systémique, pas un goût.
+  checks.push(checkHotPathStaticity(opts.cwd, fileExists, readText));
+
   // 7. manifeste maître + index présents (socle d'analyse).
   const loaded = await loadWorkspaceManifest(opts.cwd);
   checks.push(checkWorkspaceManifest(loaded));
@@ -132,6 +145,14 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorReport> {
     checks.push(checkLibraryDeclared(loaded.manifest));
     checks.push(checkClaspConfig(opts.cwd, loaded.manifest, fileExists, readText));
     checks.push(checkBaselines(opts.cwd, loaded.manifest, fileExists));
+  }
+
+  // 9. Scan secrets (opt-in via --secrets-scan). Hors-réseau, best-effort.
+  // Ne JAMAIS afficher la valeur d'un secret : seul le nom du pattern et la
+  // localisation (fichier:ligne) sortent du check.
+  if (opts.secretsScan) {
+    const readDir = opts.readDir ?? defaultReadDir;
+    checks.push(...checkSecretsScan(opts.cwd, fileExists, readText, readDir));
   }
 
   const hasError = checks.some((c) => c.status === 'error');
@@ -375,6 +396,293 @@ function checkBaselines(
     `${missing.length} projet(s) cloné(s) sans baseline (${missing.join(', ')}) — le hook PostToolUse restera SILENCIEUX pour eux`,
     'gaslens scan <dossier-projet> -o <dossier>/.gaslens/baseline.json',
   );
+}
+
+/**
+ * Check A (B2) — invariant L1 : le chemin chaud doit être statique-local-instant.
+ * On scanne les hooks PreToolUse / PostToolUse / Stop / SubagentStop du
+ * `.claude/settings.json` du workspace courant et on remonte un WARN pour
+ * chaque event qui contient au moins un hook référençant `ultracode` / `xhigh`
+ * (au sens large : flag d'effort, alias court, etc.). On n'extrait JAMAIS la
+ * commande complète dans le message — elle pourrait contenir un secret en
+ * argument ; on se borne à nommer l'event et le pattern.
+ *
+ * Toujours actif (pas opt-in) : c'est un garde-fou systémique, pas un audit.
+ */
+function checkHotPathStaticity(
+  cwd: string,
+  fileExists: (p: string) => boolean,
+  readText: (p: string) => string | null,
+): DoctorCheck {
+  const settingsPath = join(cwd, '.claude', 'settings.json');
+  if (!fileExists(settingsPath)) {
+    return mk(
+      'hot-path-staticity',
+      'invariant L1 (hot path statique)',
+      'ok',
+      'pas de .claude/settings.json — rien à vérifier',
+    );
+  }
+  const raw = readText(settingsPath);
+  if (!raw) {
+    return mk(
+      'hot-path-staticity',
+      'invariant L1 (hot path statique)',
+      'ok',
+      '.claude/settings.json illisible — délégué au check plugin-enabled',
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return mk(
+      'hot-path-staticity',
+      'invariant L1 (hot path statique)',
+      'ok',
+      '.claude/settings.json JSON invalide — délégué au check plugin-enabled',
+    );
+  }
+  const hooks =
+    parsed && typeof parsed === 'object'
+      ? (parsed as { hooks?: Record<string, unknown> }).hooks
+      : undefined;
+  if (!hooks || typeof hooks !== 'object') {
+    return mk(
+      'hot-path-staticity',
+      'invariant L1 (hot path statique)',
+      'ok',
+      'aucun hook déclaré',
+    );
+  }
+  const hotEvents = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop'] as const;
+  // Patterns case-insensitive. On capture les variantes `--effort ultracode`
+  // et `--effort=ultracode` à travers le motif `ultracode` lui-même.
+  const patterns: { name: string; rx: RegExp }[] = [
+    { name: 'ultracode', rx: /ultracode/i },
+    { name: 'xhigh', rx: /xhigh/i },
+  ];
+  const offending: { event: string; pattern: string }[] = [];
+  for (const event of hotEvents) {
+    const groups = (hooks as Record<string, unknown>)[event];
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!group || typeof group !== 'object') continue;
+      const inner = (group as { hooks?: unknown }).hooks;
+      if (!Array.isArray(inner)) continue;
+      for (const h of inner) {
+        if (!h || typeof h !== 'object') continue;
+        const cmd = (h as { command?: unknown }).command;
+        if (typeof cmd !== 'string') continue;
+        for (const p of patterns) {
+          if (p.rx.test(cmd)) {
+            offending.push({ event, pattern: p.name });
+          }
+        }
+      }
+    }
+  }
+  if (offending.length === 0) {
+    return mk(
+      'hot-path-staticity',
+      'invariant L1 (hot path statique)',
+      'ok',
+      'aucun ultracode/xhigh dans les hooks du chemin chaud',
+    );
+  }
+  // Déduplique (event, pattern) pour ne pas remonter 5 fois la même chose.
+  const seen = new Set<string>();
+  const uniq = offending.filter((o) => {
+    const k = `${o.event}:${o.pattern}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const detail = uniq
+    .map(
+      (o) =>
+        `${o.pattern} détecté dans hook ${o.event}; viole invariant L1 (chemin chaud doit être statique-local-instant).`,
+    )
+    .join(' ');
+  return mk(
+    'hot-path-staticity',
+    'invariant L1 (hot path statique)',
+    'warn',
+    detail,
+    'retirer ultracode/xhigh des hooks PreToolUse/PostToolUse/Stop/SubagentStop ; déléguer ces efforts à des skills/commands hors chemin chaud',
+  );
+}
+
+/**
+ * Check B (B2) — scan secrets opt-in. Deux volets :
+ *  1. Présence de fichiers secret-bearing (`.clasprc.json`, `.env*`) à la
+ *     racine + 1-2 niveaux de subdir → un warning par fichier (« assure-toi
+ *     qu'il est gitignored »). On NE LIT PAS leur contenu.
+ *  2. Best-effort grep des fichiers texte du repo (hors node_modules / dist /
+ *     .git) pour quelques patterns à très faible faux-positif (Google API
+ *     key, OAuth access token, début de clé privée JSON). Pour chaque hit :
+ *     warning `file:line — PATTERN_NAME` — JAMAIS la valeur.
+ *
+ * Hors-réseau ; pas de shell ; uniquement readdir + read texte avec garde-fou
+ * de taille. Best-effort = un fichier illisible / binaire est silencieusement
+ * sauté, pas une erreur.
+ */
+function checkSecretsScan(
+  cwd: string,
+  fileExists: (p: string) => boolean,
+  readText: (p: string) => string | null,
+  readDir: (p: string) => string[] | null,
+): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const secretFiles = findSecretBearingFiles(cwd, fileExists, readDir);
+  for (const rel of secretFiles) {
+    checks.push(
+      mk(
+        `secrets-file:${rel}`,
+        'fichier porteur de secret',
+        'warn',
+        `Detected secret-bearing file at ${rel}; ensure gitignored.`,
+        `vérifier que ${rel} est listé dans .gitignore et n'a jamais été commit`,
+      ),
+    );
+  }
+  const hits = scanForSecretPatterns(cwd, readText, readDir);
+  for (const h of hits) {
+    checks.push(
+      mk(
+        `secrets-pattern:${h.file}:${h.line}`,
+        'pattern secret dans un fichier',
+        'warn',
+        `${h.file}:${h.line} — ${h.pattern}`,
+        `retirer la valeur, régénérer le secret côté fournisseur, et purger l'historique git si déjà commit`,
+      ),
+    );
+  }
+  if (checks.length === 0) {
+    checks.push(
+      mk('secrets-scan', 'scan secrets (--secrets-scan)', 'ok', 'aucun secret probable détecté'),
+    );
+  }
+  return checks;
+}
+
+/**
+ * Walk best-effort sur cwd + 1-2 niveaux de sous-dossiers à la recherche de
+ * fichiers `.clasprc.json` / `.env*`. On évite node_modules / .git / dist /
+ * .gaslens / lib-cache. On ne lit JAMAIS le contenu — uniquement la présence.
+ */
+function findSecretBearingFiles(
+  cwd: string,
+  fileExists: (p: string) => boolean,
+  readDir: (p: string) => string[] | null,
+): string[] {
+  const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.gaslens', 'lib-cache', 'coverage']);
+  const found: string[] = [];
+  function isSecretName(name: string): boolean {
+    if (name === '.clasprc.json') return true;
+    if (name === '.env') return true;
+    if (name.startsWith('.env.')) return true;
+    return false;
+  }
+  function walk(dir: string, depth: number): void {
+    const entries = readDir(dir);
+    if (!entries) return;
+    for (const name of entries) {
+      const full = join(dir, name);
+      if (isSecretName(name) && fileExists(full)) {
+        const rel = relative(cwd, full).split(/[\\/]/g).join('/');
+        if (!found.includes(rel)) found.push(rel);
+        continue;
+      }
+      if (depth >= 2) continue;
+      if (SKIP_DIRS.has(name)) continue;
+      if (name.startsWith('.') && name !== '.claude') continue;
+      // Pas de stat() facile sans I/O supplémentaire : on tente un readDir,
+      // qui renvoie null pour les fichiers — on continue alors silencieusement.
+      walk(full, depth + 1);
+    }
+  }
+  walk(cwd, 0);
+  return found.sort();
+}
+
+interface SecretHit {
+  file: string;
+  line: number;
+  pattern: string;
+}
+
+/**
+ * Best-effort scan : on traverse le repo en sautant les dossiers connus pour
+ * être bruyants / binaires, et on grep ligne à ligne avec 3 patterns à très
+ * faible faux-positif. JAMAIS la valeur dans la sortie, uniquement le nom du
+ * pattern et la position.
+ */
+function scanForSecretPatterns(
+  cwd: string,
+  readText: (p: string) => string | null,
+  readDir: (p: string) => string[] | null,
+): SecretHit[] {
+  const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.gaslens', 'lib-cache', 'coverage']);
+  const SKIP_EXTS = new Set([
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf',
+    '.zip', '.gz', '.tgz', '.tar', '.lock', '.map', '.woff', '.woff2', '.ttf', '.eot',
+  ]);
+  const MAX_BYTES = 256 * 1024; // garde-fou : on ignore les très gros fichiers
+  const patterns: { name: string; rx: RegExp }[] = [
+    { name: 'GOOGLE_API_KEY', rx: /AIza[0-9A-Za-z_-]{35}/ },
+    { name: 'OAUTH_ACCESS_TOKEN', rx: /ya29\.[0-9A-Za-z_-]+/ },
+    { name: 'SERVICE_ACCOUNT_PRIVATE_KEY', rx: /"private_key":\s*"-----BEGIN/ },
+  ];
+  const hits: SecretHit[] = [];
+  function walk(dir: string, depth: number): void {
+    if (depth > 8) return; // garde-fou récursion
+    const entries = readDir(dir);
+    if (!entries) return;
+    for (const name of entries) {
+      if (SKIP_DIRS.has(name)) continue;
+      const full = join(dir, name);
+      const ext = lastDotExt(name);
+      if (ext && SKIP_EXTS.has(ext)) continue;
+      // On distingue dossier / fichier en tentant readDir : null → fichier.
+      const sub = readDir(full);
+      if (sub) {
+        walk(full, depth + 1);
+        continue;
+      }
+      const raw = readText(full);
+      if (raw === null) continue;
+      if (raw.length > MAX_BYTES) continue;
+      // Skip binaires : présence d'un NUL byte → on saute.
+      if (raw.includes('\0')) continue;
+      const lines = raw.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? '';
+        for (const p of patterns) {
+          if (p.rx.test(line)) {
+            const relPath = relative(cwd, full).split(/[\\/]/g).join('/');
+            hits.push({ file: relPath, line: i + 1, pattern: p.name });
+          }
+        }
+      }
+    }
+  }
+  walk(cwd, 0);
+  return hits;
+}
+
+function lastDotExt(name: string): string | null {
+  const i = name.lastIndexOf('.');
+  if (i <= 0) return null;
+  return name.slice(i).toLowerCase();
+}
+
+function defaultReadDir(p: string): string[] | null {
+  try {
+    return readdirSync(p);
+  } catch {
+    return null;
+  }
 }
 
 function defaultReadText(p: string): string | null {

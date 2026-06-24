@@ -11,7 +11,7 @@
  * (`writeWorkspace`) ne touche jamais un fichier existant sans `force`.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -35,6 +35,30 @@ export interface ScaffoldFile {
 }
 
 const MARKETPLACE_SOURCE = 'MaloLeCouls/GasLens';
+
+/**
+ * Allowlist par défaut des commandes gaslens **read-only** (V5 §33 — A2).
+ *
+ * Auto-approuve dans Claude Code les sous-commandes qui n'ont aucun effet de
+ * bord distant : pas de push/deploy, jamais l'API Apps Script. Le casting reste
+ * intact (gaslens = cerveau / clasp = mains) : tout ce qui mute Google reste
+ * sous gate humain via `clasp push`/`clasp deploy`, **volontairement absents**
+ * de cette liste.
+ */
+export const DEFAULT_GASLENS_ALLOW: readonly string[] = [
+  'Bash(gaslens scan:*)',
+  'Bash(gaslens map:*)',
+  'Bash(gaslens inspect:*)',
+  'Bash(gaslens impact:*)',
+  'Bash(gaslens diff:*)',
+  'Bash(gaslens check:*)',
+  'Bash(gaslens env validate:*)',
+  'Bash(gaslens doc lint:*)',
+  'Bash(gaslens manifest:*)',
+  'Bash(gaslens validate-api:*)',
+  'Bash(gaslens workspace overview:*)',
+  'Bash(gaslens doctor:*)',
+];
 
 export function buildWorkspaceFiles(opts: WorkspaceInitOptions): ScaffoldFile[] {
   const { name } = opts;
@@ -87,6 +111,22 @@ export async function writeWorkspace(
   const skipped: WriteWorkspaceResult['skipped'] = [];
   for (const f of files) {
     const full = join(root, f.path);
+    // `.claude/settings.json` est un cas particulier (A2) : si un settings
+    // existe déjà, on fusionne **en dédupliquant** la liste `permissions.allow`
+    // au lieu d'écraser (préserve les réglages utilisateur) ou de simplement
+    // skip (sinon l'allowlist gaslens ne s'applique jamais sur les workspaces
+    // déjà initialisés).
+    if (f.path === '.claude/settings.json' && existsSync(full)) {
+      const merged = await mergeClaudeSettings(full, f.content);
+      if (merged.changed) {
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, merged.content, 'utf8');
+        written.push(f.path);
+      } else {
+        skipped.push({ path: f.path, reason: 'déjà à jour (fusion sans changement)' });
+      }
+      continue;
+    }
     if (existsSync(full) && !opts.force) {
       skipped.push({ path: f.path, reason: 'existe déjà (utiliser --force pour écraser)' });
       continue;
@@ -96,6 +136,61 @@ export async function writeWorkspace(
     written.push(f.path);
   }
   return { written, skipped };
+}
+
+/**
+ * Fusionne un `.claude/settings.json` existant avec celui qu'on s'apprête à
+ * écrire (A2). Préserve toutes les clés utilisateur, complète
+ * `permissions.allow` en dédupliquant, et n'écrase une valeur scalaire que si
+ * elle est absente côté existant. Renvoie `changed: false` quand la fusion ne
+ * produit aucune modification (évite un write inutile + un faux « written »).
+ */
+async function mergeClaudeSettings(
+  fullPath: string,
+  generatedContent: string,
+): Promise<{ content: string; changed: boolean }> {
+  const generated = JSON.parse(generatedContent) as Record<string, unknown>;
+  let existingRaw: string;
+  try {
+    existingRaw = await readFile(fullPath, 'utf8');
+  } catch {
+    return { content: generatedContent, changed: true };
+  }
+  let existing: Record<string, unknown>;
+  try {
+    existing = JSON.parse(existingRaw) as Record<string, unknown>;
+  } catch {
+    // JSON invalide existant : on n'écrase pas silencieusement.
+    return { content: existingRaw, changed: false };
+  }
+
+  const merged: Record<string, unknown> = { ...existing };
+
+  // Compléter les clés top-level absentes (extraKnownMarketplaces,
+  // enabledPlugins) sans toucher à ce que l'utilisateur a déjà mis.
+  for (const [k, v] of Object.entries(generated)) {
+    if (k === 'permissions') continue;
+    if (!(k in merged)) merged[k] = v;
+  }
+
+  // Fusion permissions.allow avec dédup (préserve l'ordre : existant d'abord,
+  // puis nouvelles entrées générées).
+  const genPerms = (generated.permissions ?? {}) as { allow?: unknown };
+  const existingPerms = (existing.permissions ?? {}) as Record<string, unknown> & {
+    allow?: unknown;
+  };
+  const genAllow = Array.isArray(genPerms.allow) ? (genPerms.allow as unknown[]) : [];
+  const existingAllow = Array.isArray(existingPerms.allow)
+    ? (existingPerms.allow as unknown[])
+    : [];
+  const dedup: unknown[] = [...existingAllow];
+  for (const entry of genAllow) {
+    if (!dedup.includes(entry)) dedup.push(entry);
+  }
+  merged.permissions = { ...existingPerms, allow: dedup };
+
+  const out = JSON.stringify(merged, null, 2) + '\n';
+  return { content: out, changed: out !== existingRaw };
 }
 
 /**
@@ -128,6 +223,17 @@ effet de bord). Le casting (V4 §26) : gaslens = cerveau, clasp = mains
 (push/deploy), Chrome DevTools MCP = yeux (exécution réelle). La source de
 vérité du parc est \`gaslens.workspace.json\` (apps, bibliothèque, environnements,
 ressources) — *lue* par gaslens, *écrite* par les skills d'onboarding.
+
+## Sources de vérité du parc
+
+Deux fichiers font foi avant toute action :
+
+- \`gaslens.workspace.json\` à la racine du workspace — le manifeste maître
+  (topologie multi-app dev/prod, bibliothèque, environnements, ressources).
+- \`REGISTRY.md\` à la racine du workspace — la cartographie scriptId / URLs
+  \`/dev\` et \`/exec\` / embeds Sites par app et par environnement, générée par
+  \`gaslens workspace overview --format registry --write REGISTRY.md\`. À
+  régénérer après chaque changement de déploiement ou d'embed.
 
 ## Contrat de confiance (ce sur quoi tu peux t'appuyer)
 
@@ -208,6 +314,7 @@ function claudeSettings(): string {
       {
         extraKnownMarketplaces: { gaslens: { source: MARKETPLACE_SOURCE } },
         enabledPlugins: ['gaslens@gaslens'],
+        permissions: { allow: [...DEFAULT_GASLENS_ALLOW] },
       },
       null,
       2,

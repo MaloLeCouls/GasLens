@@ -5,6 +5,17 @@ Casting (V4 §26) : gaslens = cerveau, clasp = mains (push/deploy), Chrome
 DevTools MCP = yeux (exécution réelle). Source de vérité du parc :
 `gaslens.workspace.json` — *lue* par gaslens, *écrite* par les skills.
 
+## Sources de vérité du parc
+
+Deux fichiers font foi avant toute action :
+
+- `gaslens.workspace.json` à la racine du workspace — le manifeste maître
+  (topologie multi-app dev/prod, bibliothèque, environnements, ressources).
+- `REGISTRY.md` à la racine du workspace — la cartographie scriptId / URLs
+  `/dev` et `/exec` / embeds Sites par app et par environnement, générée par
+  `gaslens workspace overview --format registry --write REGISTRY.md`. À
+  régénérer après chaque changement de déploiement ou d'embed.
+
 ## Contrat de confiance
 
 À chaque édition de `.gs`/`.html`, le hook PostToolUse lance le pipeline

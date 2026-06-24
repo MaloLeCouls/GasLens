@@ -1687,14 +1687,33 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--no-scan', 'Sauter le scan (pas de couverture doc / compte de fonctions) — plus rapide')
     .option('--format <fmt>', 'json | text | registry (REGISTRY.md généré — plan de masse)', 'text')
     .option('--compact', 'JSON sans indentation (économie tokens pour agent IA)', false)
+    .option(
+      '--write <path>',
+      "Écrire la sortie dans le fichier au lieu de stdout (ex: --format registry --write REGISTRY.md). " +
+        "Le dossier parent doit exister — pas de création automatique.",
+    )
     .action(async (root: string, opts: ParcOverviewCliOpts) => {
       const report = await buildParcOverview({ root: resolve(root), noScan: !opts.scan });
+      let payload: string;
       if (opts.format === 'json') {
-        process.stdout.write(jsonOut(report, opts.compact) + '\n');
+        payload = jsonOut(report, opts.compact) + '\n';
       } else if (opts.format === 'registry') {
-        process.stdout.write(renderRegistryText(report));
+        payload = renderRegistryText(report);
       } else {
-        process.stdout.write(renderParcOverviewText(report) + '\n');
+        payload = renderParcOverviewText(report) + '\n';
+      }
+      if (opts.write) {
+        const out = resolve(opts.write);
+        if (!existsSync(dirname(out))) {
+          process.stderr.write(
+            `gaslens workspace overview: dossier parent introuvable pour --write : ${dirname(out)}\n`,
+          );
+          process.exit(2);
+        }
+        await writeFile(out, payload, 'utf8');
+        process.stderr.write(`Wrote ${Buffer.byteLength(payload, 'utf8')} bytes to ${out}\n`);
+      } else {
+        process.stdout.write(payload);
       }
       if (report.env_verdict === 'BREAK') process.exit(3);
       process.exit(0);
@@ -1711,10 +1730,18 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .argument('[root]', 'Racine à inspecter', '.')
     .option('--hook', 'Mode hook SessionStart (sortie condensée)', false)
     .option('--quiet-when-ok', 'Silencieux si rien à régler (error/warn)', false)
+    .option(
+      '--secrets-scan',
+      "Active le scan secrets opt-in : fichiers .clasprc.json/.env*, patterns Google API key / OAuth / clé privée. Hors-réseau, best-effort.",
+      false,
+    )
     .option('--format <fmt>', 'json | text', 'text')
     .option('--compact', 'JSON sans indentation', false)
     .action(async (root: string, opts: DoctorCliOpts) => {
-      const report = await runDoctor({ cwd: resolve(root) });
+      const report = await runDoctor({
+        cwd: resolve(root),
+        secretsScan: opts.secretsScan,
+      });
       if (opts.format === 'json') {
         if (!(opts.quietWhenOk && report.ok)) {
           process.stdout.write(jsonOut(report, opts.compact) + '\n');
@@ -1846,6 +1873,7 @@ interface DocStubCliOpts {
 interface DoctorCliOpts {
   hook: boolean;
   quietWhenOk: boolean;
+  secretsScan: boolean;
   format: string;
   compact: boolean;
 }
@@ -1866,6 +1894,7 @@ interface ParcOverviewCliOpts {
   scan: boolean;
   format: string;
   compact: boolean;
+  write?: string;
 }
 
 interface RequestAddCliOpts {

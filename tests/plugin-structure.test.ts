@@ -94,4 +94,16 @@ describe('plugin — templates', () => {
       expect(existsSync(join(repo, 'templates/claude-md', f))).toBe(true);
     }
   });
+
+  it('les fragments claude-md de workspace référencent REGISTRY.md et gaslens.workspace.json', () => {
+    for (const f of ['root.md', 'app.md', 'project.md']) {
+      const text = readText(`templates/claude-md/${f}`);
+      expect(text).toContain('gaslens.workspace.json');
+      expect(text).toContain('REGISTRY.md');
+    }
+    // Le fragment root.md doit aussi expliciter la commande de génération.
+    expect(readText('templates/claude-md/root.md')).toContain(
+      'gaslens workspace overview --format registry --write REGISTRY.md',
+    );
+  });
 });

@@ -6,6 +6,15 @@ Préfixe de librairie exposé (si lib) : `{{LIB_PREFIX}}` — les appels
 Entry points web : `doGet` / `doPost` (cf. `gaslens inspect doGet`).
 Fonctions privées : suffixe `_` (non appelables par `google.script.run`).
 
+### Sources de vérité du parc
+
+Deux fichiers à la racine du workspace font foi :
+`gaslens.workspace.json` (manifeste maître : topologie multi-app dev/prod,
+bibliothèque, environnements, ressources) et `REGISTRY.md` (cartographie
+scriptId / URLs `/dev` et `/exec` / embeds Sites, générée par
+`gaslens workspace overview --format registry --write REGISTRY.md`). Consulte-les
+avant d'agir sur les déploiements ou les ressources de cette app.
+
 ### Environnements (modèle « hard » : 2 projets par webapp)
 
 - `dev`  → `apps/{{APP}}/dev`  : lib en HEAD, ressources de dev.
